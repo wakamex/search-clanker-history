@@ -32,11 +32,11 @@ class CliTests(unittest.TestCase):
         )
 
     def test_entry_points_report_the_package_version(self):
-        expected = version("search-claude-history")
+        expected = version("search-clanker-history")
         for args in (
             ("sch", "--version"),
-            ("search-claude-history", "--version"),
-            (sys.executable, "-m", "search_claude_history", "--version"),
+            ("search-clanker-history", "--version"),
+            (sys.executable, "-m", "search_clanker_history", "--version"),
         ):
             with self.subTest(args=args):
                 result = self.run_cli(*args)

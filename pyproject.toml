@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "search-claude-history"
+name = "search-clanker-history"
 version = "0.1.3"
 description = "Search across Claude Code, Codex, OpenCode and Hermes session history"
 readme = "README.md"
@@ -15,15 +15,12 @@ Homepage = "https://github.com/wakamex/search-clanker-history"
 Source = "https://github.com/wakamex/search-clanker-history"
 
 [project.optional-dependencies]
-hyperscan = ["hyperscan>=0.7"]  # agents: claude codex
-ripgrep = ["ripgrep>=15"]  # agents: claude codex
+hyperscan = ["hyperscan>=0.7"]
+ripgrep = ["ripgrep>=15"]
 
 [project.scripts]
-search-claude-history = "_search_claude_history_entry:main"
-sch = "_search_claude_history_entry:main"
-
-[project.entry-points."search_history.agents"]
-search_claude_history = "search_claude_history.cli:SOURCES"
+search-clanker-history = "_search_clanker_history_entry:main"
+sch = "_search_clanker_history_entry:main"
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/_search_claude_history_entry.py" = "_search_claude_history_entry.py"
+"src/_search_clanker_history_entry.py" = "_search_clanker_history_entry.py"

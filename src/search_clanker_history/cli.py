@@ -1,6 +1,6 @@
 """Search the session history of coding agents for keywords or patterns in messages.
 
-Which agents are covered depends on the package this file was built into; see build_variants.py.
+Which agents a plain search covers depends on the installed wrapper packages and the saved default; see RELEASES.md.
 Matching uses rg when available, falling back to pure Python otherwise.
 
 Usage:
@@ -12,47 +12,39 @@ Usage:
 """
 
 import argparse
-import concurrent.futures  # agents: claude codex
+import concurrent.futures
 import itertools
 import json
-import mmap  # agents: claude codex
-import multiprocessing  # agents: claude codex
+import mmap
+import multiprocessing
 import os
 import re
-import shutil  # agents: claude codex
-import sqlite3  # agents: opencode hermes
+import shutil
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# agents: claude
 def _claude_roots():
     return [Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "projects"]
 
 
-# end agents
-# agents: codex
 def _codex_roots():
     home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     return [home / "sessions", home / "archived_sessions"]
 
 
-# end agents
-# agents: opencode
 def _opencode_db():
     data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     return data / "opencode" / "opencode.db"
 
 
-# end agents
-# agents: hermes
 def _hermes_db():
     return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "state.db"
 
 
-# end agents
-_DIST_NAME = "search-claude-history"  # build: rewritten per package
+_DIST_NAME = "search-clanker-history"
 
 
 def _get_version():
@@ -155,7 +147,6 @@ def RESET():
     return _sgr("0")
 
 
-# agents: claude
 def extract_text(message_obj):
     """Extract readable text from a JSONL line's message content."""
     content = message_obj.get("content", "")
@@ -220,7 +211,6 @@ def classify_line(obj):
     return None
 
 
-# end agents
 def highlight_pattern(text, pattern, ignore_case=True):
     """Highlight pattern matches in text with bold red."""
     try:
@@ -256,7 +246,6 @@ def truncate_around_match(text, pattern, context_chars):
     return result
 
 
-# agents: claude
 def parse_session_info(filepath):
     """Extract project name and session ID from filepath."""
     parts = Path(filepath).parts
@@ -271,7 +260,6 @@ def parse_session_info(filepath):
     return project, session_id
 
 
-# end agents
 _REL_TIME_RE = re.compile(r"^(\d+)\s*([mhdw])$")
 
 
@@ -311,7 +299,6 @@ def _parse_iso_ts(ts):
         return None
 
 
-# agents: claude codex
 def _list_files(roots, since=None):
     """Return (mtime, path) for session JSONL files, oldest first, excluding subagents/.
 
@@ -504,8 +491,6 @@ def _scan(pattern, paths, keep=None, line_prefix=None):
     yield from _scan_python(pattern, paths)
 
 
-# end agents
-# agents: codex
 # --- Codex rollout files --------------------------------------------------
 
 _CODEX_INJECTED_PREFIXES = ("# AGENTS.md instructions", "<environment_context>")
@@ -566,7 +551,6 @@ def _codex_session_info(filepath):
     return project, Path(filepath).stem[-36:]
 
 
-# end agents
 # --- Hits -------------------------------------------------------------------
 
 
@@ -595,7 +579,6 @@ class Hit:
         return self.dt.strftime("%Y-%m-%d %H:%M") if self.dt else ""
 
 
-# agents: claude codex
 def _read_lines_after(f, offset, n):
     """The n lines following the line that starts at `offset`."""
     f.seek(offset)
@@ -638,8 +621,6 @@ def _jsonl_context(filepath, offset, before, after, classify):
     return entries[0], entries[1]
 
 
-# end agents
-# agents: claude codex
 # Cheap byte-level checks that drop lines classify would discard as tool traffic, so the
 # (often huge) tool results are never decoded or parsed unless --tools asks for them.
 def _type_markers(*names):
@@ -647,22 +628,18 @@ def _type_markers(*names):
     return tuple(f'"type":{sp}"{n}"'.encode() for n in names for sp in ("", " "))
 
 
-_TEXT, _TOOL = _type_markers("text"), _type_markers("tool_result", "tool_use")  # agents: claude
-_MESSAGE = _type_markers("message")  # agents: codex
+_TEXT, _TOOL = _type_markers("text"), _type_markers("tool_result", "tool_use")
+_MESSAGE = _type_markers("message")
 
 
 def _has_any(line, markers):
     return any(m in line for m in markers)
 
 
-# end agents
-# agents: claude
 def _keep_claude(line, tools):
     return tools or _has_any(line, _TEXT) or not _has_any(line, _TOOL)
 
 
-# end agents
-# agents: codex
 # Codex message lines start `{"timestamp":...,("ordinal":N,)"type":"response_item","payload":{"type":"message"`;
 # unlike a lookahead, this anchored regex keeps rg on its fast path. It matches a superset of the lines
 # classify_codex_line accepts (it also matches developer messages).
@@ -676,8 +653,6 @@ def _keep_codex(line, tools):
     return tools or _has_any(line, _MESSAGE)
 
 
-# end agents
-# agents: claude codex
 _BATCH_FILES_UNBOUNDED = 256
 _BATCH_FILES_NEWEST_FIRST = 32
 
@@ -720,8 +695,6 @@ def _jsonl_hits(
             )
 
 
-# end agents
-# agents: claude
 def claude_hits(pattern, project_filter, since, newest_first=False, tools=False):
     yield from _jsonl_hits(
         "claude", _claude_roots(), pattern, since, classify_line, parse_session_info,
@@ -729,8 +702,6 @@ def claude_hits(pattern, project_filter, since, newest_first=False, tools=False)
     )
 
 
-# end agents
-# agents: codex
 def codex_hits(pattern, project_filter, since, newest_first=False, tools=False):
     yield from _jsonl_hits(
         "codex", _codex_roots(), pattern, since, classify_codex_line, _codex_session_info,
@@ -738,8 +709,6 @@ def codex_hits(pattern, project_filter, since, newest_first=False, tools=False):
     )
 
 
-# end agents
-# agents: opencode hermes
 # --- SQLite-backed agents (OpenCode, Hermes) ----------------------------------
 
 
@@ -812,8 +781,6 @@ def _tool_text(name, detail, output=""):
     return f"{text}\n{output}" if output else text
 
 
-# end agents
-# agents: opencode
 def _opencode_load(conn, sid):
     row = conn.execute("SELECT directory FROM session WHERE id = ?", (sid,)).fetchone()
     project = (row[0] if row else "").replace("/", "-")
@@ -848,8 +815,6 @@ def opencode_hits(pattern, project_filter, since, newest_first=False, tools=Fals
     )
 
 
-# end agents
-# agents: hermes
 def _hermes_load(conn, sid):
     row = conn.execute("SELECT cwd, source FROM sessions WHERE id = ?", (sid,)).fetchone()
     project = ((row[0] or "").replace("/", "-") or row[1] or "") if row else ""
@@ -886,36 +851,98 @@ def hermes_hits(pattern, project_filter, since, newest_first=False, tools=False)
     )
 
 
-# end agents
 # Agents this package searches: name -> (hits function, is there history here, label).
 SOURCES = {
-    "claude": (claude_hits, lambda: any(r.exists() for r in _claude_roots()), "Claude Code"),  # agents: claude
-    "codex": (codex_hits, lambda: any(r.exists() for r in _codex_roots()), "Codex"),  # agents: codex
-    "opencode": (opencode_hits, lambda: _opencode_db().exists(), "OpenCode"),  # agents: opencode
-    "hermes": (hermes_hits, lambda: _hermes_db().exists(), "Hermes"),  # agents: hermes
+    "claude": (claude_hits, lambda: any(r.exists() for r in _claude_roots()), "Claude Code"),
+    "codex": (codex_hits, lambda: any(r.exists() for r in _codex_roots()), "Codex"),
+    "opencode": (opencode_hits, lambda: _opencode_db().exists(), "OpenCode"),
+    "hermes": (hermes_hits, lambda: _hermes_db().exists(), "Hermes"),
 }
 
 
-def _add_installed_agents():
-    """Add the agents of other installed packages built from this source.
+def _config_path():
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "search-history" / "config.json"
 
-    Every package registers its SOURCES under the `search_history.agents` entry-point group, so
-    whichever package's `sch` runs searches all the agents installed in the environment.
-    """
-    from importlib.metadata import entry_points
-    eps = entry_points()
-    eps = eps.select(group="search_history.agents") if hasattr(eps, "select") else eps.get("search_history.agents", [])
-    own = _DIST_NAME.replace("-", "_") + "."
-    for ep in eps:
-        if ep.value.startswith(own):
-            continue
+
+def _read_config_agents():
+    """The agents the user chose with --default-agents (["all"] for every agent), or None."""
+    try:
+        agents = json.loads(_config_path().read_text()).get("agents")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return agents if isinstance(agents, list) and all(isinstance(a, str) for a in agents) else None
+
+
+def _write_config_agents(agents):
+    """Store the default agents; None removes the setting."""
+    path = _config_path()
+    if agents is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"agents": agents}) + "\n")
+
+
+# Wrapper packages (see build_wrappers.py) install this tool with a default scope. They contain no
+# code, so which agents a plain `sch` searches comes from which wrappers are installed, whichever
+# script of theirs or ours runs.
+_WRAPPER_AGENTS = {"search-claude-history": "claude", "search-codex-history": "codex"}
+
+
+def _installed_wrappers():
+    from importlib.metadata import PackageNotFoundError, version
+    found = []
+    for name in _WRAPPER_AGENTS:
         try:
-            installed = ep.load()
-        except Exception as e:  # a broken sibling must not take down the tool
-            print(f"warning: cannot load agents from {ep.value}: {e}", file=sys.stderr)
+            version(name)
+        except PackageNotFoundError:
             continue
-        for name, entry in installed.items():
-            SOURCES.setdefault(name, entry)
+        found.append(name)
+    return found
+
+
+def _package_default():
+    """The agents of the installed wrapper packages, or None when there are none."""
+    return [_WRAPPER_AGENTS[name] for name in _installed_wrappers()] or None
+
+
+def _default_agents():
+    """The agents searched when --agent is not given, and where that choice comes from.
+
+    Returns (agent names, or None for every agent with history, source description).
+    """
+    configured = _read_config_agents()
+    if configured is not None:
+        return (None if configured == ["all"] else configured), "config file"
+    package_default = _package_default()
+    if package_default:
+        return package_default, "package default"
+    return None, "built-in default"
+
+
+def _scope_description():
+    names, _ = _default_agents()
+    return "searching " + ", ".join(SOURCES[n][2] for n in (names or SOURCES) if n in SOURCES) + " by default"
+
+
+def _show_default_agents():
+    names, source = _default_agents()
+    print(f"default agents: {', '.join(names) if names else 'every agent with history'} ({source})")
+
+
+def _set_default_agents(values):
+    """Handle `--default-agents VALUES`: show, set, or reset (remove) the saved default."""
+    if not values:
+        _show_default_agents()
+    elif values == ["reset"]:
+        _write_config_agents(None)
+        _show_default_agents()
+    elif values == ["all"] or "all" not in values and "reset" not in values:
+        _write_config_agents(values)
+        _show_default_agents()
+    else:
+        print("error: use 'all' or 'reset' alone, or a list of agents", file=sys.stderr)
+        sys.exit(2)
 
 
 def format_role(role):
@@ -928,19 +955,23 @@ def format_role(role):
 
 
 def main():
-    _add_installed_agents()
     parser = argparse.ArgumentParser(
         description=f"Search {', '.join(v[2] for v in SOURCES.values())} session history",
     )
     parser.add_argument(
         "-V", "--version", action="version",
-        version=f"%(prog)s {_get_version()} ({_DIST_NAME})",
+        version=f"%(prog)s {_get_version()} ({', '.join(_installed_wrappers()) or _DIST_NAME}), {_scope_description()}",
     )
-    parser.add_argument("pattern", help="Search pattern (supports regex)")
+    parser.add_argument("pattern", nargs="?", help="Search pattern (supports regex)")
     parser.add_argument(
         "--agent", action="append", choices=sorted(SOURCES), metavar="AGENT",
         help=f"Agent history to search: {', '.join(sorted(SOURCES))} "
-        "(repeatable; default: every agent with history on this machine)",
+        "(repeatable; overrides the default agents for this search)",
+    )
+    parser.add_argument(
+        "--default-agents", nargs="*", choices=[*sorted(SOURCES), "all", "reset"], metavar="AGENT",
+        help="Show the agents searched by default, or save a new default: a list of agents, "
+        "'all' for every agent with history, or 'reset' for the package's own default",
     )
     parser.add_argument("-p", "--project", help="Filter to project (substring match on dir name)")
     parser.add_argument(
@@ -977,19 +1008,24 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.default_agents is not None:
+        _set_default_agents(args.default_agents)
+        return
+    if not args.pattern:
+        parser.error("the following arguments are required: pattern")
+
     _init_color(force_no_color=args.no_color)
 
     if args.agent:
         names = list(dict.fromkeys(args.agent))
         missing = [n for n in names if not SOURCES[n][1]()]
-        if missing:
-            print(f"Error: no {', '.join(missing)} history found", file=sys.stderr)
-            sys.exit(1)
     else:
-        names = [n for n in SOURCES if SOURCES[n][1]()]
-        if not names:
-            print("Error: no agent history found", file=sys.stderr)
-            sys.exit(1)
+        scoped, _ = _default_agents()
+        names = [n for n in (scoped if scoped is not None else SOURCES) if n in SOURCES and SOURCES[n][1]()]
+        missing = [] if names else (scoped or ["agent"])
+    if missing:
+        print(f"Error: no {', '.join(missing)} history found", file=sys.stderr)
+        sys.exit(1)
 
     def accepted(hit):
         if hit.kind == "tool" and not args.tools:

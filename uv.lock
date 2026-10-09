@@ -65,7 +65,7 @@ wheels = [
 ]
 
 [[package]]
-name = "search-claude-history"
+name = "search-clanker-history"
 version = "0.1.3"
 source = { editable = "." }
 

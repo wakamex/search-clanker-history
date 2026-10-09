@@ -29,9 +29,9 @@ which sch
 
 **If installed:** Use `sch` directly (commands shown below).
 
-**If not installed:** Use `uvx search-claude-history` instead. All `sch` commands below can be run as:
+**If not installed:** Use `uvx search-clanker-history` instead. All `sch` commands below can be run as:
 ```bash
-uvx search-claude-history [OPTIONS] PATTERN
+uvx search-clanker-history [OPTIONS] PATTERN
 ```
 
 This requires [uv](https://docs.astral.sh/uv/) to be installed. If `uv` is not available, ask the user to install it first:
@@ -41,7 +41,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 Alternatively, suggest the user install globally:
 ```bash
-uv tool install search-claude-history
+uv tool install search-clanker-history
 ```
 
 ## Command Reference
