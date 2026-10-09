@@ -55,25 +55,36 @@ class WrapperBuildTests(unittest.TestCase):
         for name in build_wrappers.WRAPPERS:
             self.assertTrue((self.out / name / "LICENSE").is_file())
 
-    def test_wrappers_contain_no_code_and_start_the_core_entry_point(self):
-        for name in build_wrappers.WRAPPERS:
-            source = "".join(p.read_text() for p in (self.out / name / "src").rglob("*.py"))
-            self.assertEqual(len(source.splitlines()), 1, source)
+    def test_wrappers_are_metadata_only_and_start_the_core_entry_point(self):
+        for name, spec in build_wrappers.WRAPPERS.items():
+            files = sorted(p.name for p in (self.out / name).rglob("*") if p.is_file())
+            self.assertEqual(files, ["LICENSE", "README.md", "pyproject.toml"])
             pyproject = (self.out / name / "pyproject.toml").read_text()
             self.assertIn('sch = "_search_clanker_history_entry:main"', pyproject)
+            self.assertIn(f'{spec["agent"]} = "search_clanker_history"', pyproject)
+            self.assertIn("bypass-selection = true", pyproject)
 
-    def run_core(self, *args, home, config, wrappers=()):
-        """Run the core package with the given wrapper packages 'installed' (metadata only)."""
-        site = Path(home).parent / f"site-{'-'.join(wrappers) or 'none'}"
+    def run_core(self, *args, home, config, wrappers=(), env_extra=None):
+        """Run the core package with the given wrapper packages 'installed' (metadata only).
+
+        A name ending in "!" is a distribution of that name with no default-agent entry point, like an
+        old release of search-claude-history.
+        """
+        site = Path(home).parent / f"site-{'-'.join(wrappers) or 'none'}".replace("!", "-old")
         site.mkdir(exist_ok=True)
         for name in wrappers:
-            info = site / f"{name.replace('-', '_')}-{self.version}.dist-info"
+            plain = name.rstrip("!")
+            info = site / f"{plain.replace('-', '_')}-{self.version}.dist-info"
             info.mkdir(exist_ok=True)
-            (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {self.version}\n")
+            (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {plain}\nVersion: {self.version}\n")
+            if not name.endswith("!"):
+                agent = build_wrappers.WRAPPERS[plain]["agent"]
+                (info / "entry_points.txt").write_text(f"[search_clanker_history.default_agents]\n{agent} = search_clanker_history\n")
         env = dict(os.environ, NO_COLOR="1", HOME=str(home), XDG_CONFIG_HOME=str(config),
                    PYTHONPATH=os.pathsep.join([str(CORE_SRC), str(site)]))
         for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "HERMES_HOME", "XDG_DATA_HOME"):
             env.pop(key, None)
+        env.update(env_extra or {})
         return subprocess.run([sys.executable, "-S", "-m", "search_clanker_history", *args],
                               capture_output=True, text=True, env=env, check=False)
 
@@ -103,7 +114,7 @@ class WrapperBuildTests(unittest.TestCase):
         self.assertNotIn("xyzzy from claude", plain_codex.stdout)
         self.assertIn("xyzzy from codex", override.stdout)
         self.assertNotIn("xyzzy from claude", override.stdout)
-        self.assertIn("(search-codex-history), searching Codex by default", version.stdout)
+        self.assertIn("(search-codex-history); default agents: Codex (package default)", version.stdout)
         self.assertIn("default agents: claude (package default)", shown.stdout)
         self.assertIn("default agents: claude, codex (config file)", widened.stdout)
         for result in (both, both_from_codex):
@@ -112,6 +123,103 @@ class WrapperBuildTests(unittest.TestCase):
         self.assertIn("default agents: claude (package default)", reset.stdout)
         self.assertNotIn("xyzzy from codex", narrow_again.stdout)
         self.assertIn("2 match(es)", both_wrappers.stdout)
+
+    def scenario(self, test):
+        with tempfile.TemporaryDirectory() as parent:
+            home, config = Path(parent) / "home", Path(parent) / "config"
+            home.mkdir()
+            write_histories(home)
+            test(home, config, lambda *a, **kw: self.run_core(*a, home=home, config=config, **kw))
+
+    def test_default_agents_cannot_be_combined_with_a_search_or_abbreviated(self):
+        def check(home, config, run):
+            with_pattern = run("xyzzy", "--default-agents", "codex")
+            with_agent = run("--agent", "codex", "--default-agents")
+            abbreviated = run("--default", "codex")
+            nothing_saved = run("--default-agents")
+            duplicates = run("--default-agents", "codex", "codex")
+            self.assertEqual(with_pattern.returncode, 2)
+            self.assertIn("cannot be combined with a search", with_pattern.stderr)
+            self.assertEqual(with_agent.returncode, 2)
+            self.assertNotEqual(abbreviated.returncode, 0)
+            self.assertIn("built-in default", nothing_saved.stdout)
+            self.assertIn("settings file:", nothing_saved.stdout)
+            self.assertIn("default agents: codex (config file)", duplicates.stdout)
+        self.scenario(check)
+
+    def test_bad_saved_settings_are_reported_but_never_stop_a_search(self):
+        def check(home, config, run):
+            (config / "search-history").mkdir(parents=True)
+            path = config / "search-history" / "config.json"
+            for text, warning in (
+                ("{not json", "ignoring"),
+                ('{"agents": "codex"}', "expected a non-empty list"),
+                ('{"agents": []}', "expected a non-empty list"),
+                ('["codex"]', "expected a JSON object"),
+            ):
+                path.write_text(text)
+                result = run("xyzzy")
+                self.assertIn(warning, result.stderr, text)
+                self.assertIn("2 match(es)", result.stdout, text)
+            path.write_text('{"agents": ["Claude", "codex"]}')
+            unknown = run("xyzzy")
+            self.assertIn("unknown agents", unknown.stderr)
+            self.assertIn("Claude", unknown.stderr)
+            self.assertIn("xyzzy from codex", unknown.stdout)
+            self.assertNotIn("xyzzy from claude", unknown.stdout)
+        self.scenario(check)
+
+    def test_saving_keeps_other_settings_and_reports_an_unwritable_folder(self):
+        def check(home, config, run):
+            (config / "search-history").mkdir(parents=True)
+            path = config / "search-history" / "config.json"
+            path.write_text('{"future": 1}')
+            run("--default-agents", "codex")
+            self.assertEqual(json.loads(path.read_text()), {"future": 1, "agents": ["codex"]})
+            run("--default-agents", "reset")
+            self.assertEqual(json.loads(path.read_text()), {"future": 1})
+            path.unlink()
+            run("--default-agents", "claude")
+            run("--default-agents", "reset")
+            self.assertFalse(path.exists())
+            folder = config / "search-history"
+            folder.chmod(0o500)
+            try:
+                blocked = run("--default-agents", "codex")
+            finally:
+                folder.chmod(0o700)
+            if os.geteuid() != 0:
+                self.assertEqual(blocked.returncode, 1)
+                self.assertIn("cannot save the default agents", blocked.stderr)
+        self.scenario(check)
+
+    def test_an_empty_xdg_config_home_means_the_default_location(self):
+        def check(home, config, run):
+            result = run("--default-agents", "codex", env_extra={"XDG_CONFIG_HOME": ""})
+            self.assertIn(str(home / ".config" / "search-history" / "config.json"), result.stdout)
+            self.assertTrue((home / ".config" / "search-history" / "config.json").is_file())
+        self.scenario(check)
+
+    def test_an_old_release_without_the_entry_point_does_not_narrow_the_default(self):
+        def check(home, config, run):
+            result = run("xyzzy", wrappers=("search-claude-history!",))
+            self.assertIn("2 match(es)", result.stdout)
+        self.scenario(check)
+
+    def test_a_narrowed_default_says_what_it_did_not_search(self):
+        def check(home, config, run):
+            no_match = run("zzzznothing", wrappers=("search-claude-history",))
+            self.assertIn("No matches found.", no_match.stdout)
+            self.assertIn("not searched: Codex", no_match.stderr)
+            self.assertIn("default agents come from the package default", no_match.stderr)
+            explicit = run("zzzznothing", "--agent", "claude", wrappers=("search-claude-history",))
+            self.assertNotIn("not searched", explicit.stderr)
+            run("--default-agents", "hermes", wrappers=("search-claude-history",))
+            missing = run("xyzzy", wrappers=("search-claude-history",))
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("no hermes history found", missing.stderr)
+            self.assertIn("not searched: Claude Code, Codex", missing.stderr)
+        self.scenario(check)
 
     def test_core_package_searches_every_agent_with_history_by_default(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as config:

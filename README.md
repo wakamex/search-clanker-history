@@ -44,18 +44,20 @@ Requires [uv](https://docs.astral.sh/uv/getting-started/installation/). No syste
 
 ### Packages
 
-`search-clanker-history` is the tool. `search-claude-history` and `search-codex-history` install the same tool with a different default: `search-claude-history` searches only Claude Code unless you say otherwise, and `search-codex-history` only Codex. Each one installs the `sch` command and a command named after the package, and `sch --version` shows which package you have and which agents it searches. Install any one of them, not several, because they all provide `sch`.
+`search-clanker-history` is the tool. `search-claude-history` and `search-codex-history` install the same tool with a different default: `search-claude-history` searches only Claude Code unless you say otherwise, and `search-codex-history` only Codex. Each one installs the `sch` command and a command named after the package, and `sch --version` shows which package you have and which agents it searches by default. Install one of them, not several: they all provide `sch`, and removing one package from an environment that holds another deletes the shared `sch` (reinstall the one you keep, with `uv tool install --reinstall PACKAGE`, to get it back).
 
 Change what a plain `sch` searches at any time, with no reinstall:
 
 ```bash
-sch --default-agents                 # show the current default
+sch --default-agents                 # show the current default and where it is saved
 sch --default-agents claude codex    # search Claude Code and Codex
 sch --default-agents all             # search every agent that has history
 sch --default-agents reset           # back to the package's own default
 ```
 
-The choice is saved in `~/.config/search-history/config.json` (or under `$XDG_CONFIG_HOME`). `--agent` overrides it for a single search.
+The choice is saved in `~/.config/search-history/config.json` (or under `$XDG_CONFIG_HOME`). `--agent` overrides it for a single search. When the default hides history from other agents, `sch` says so after a search that finds nothing.
+
+Already have `search-claude-history` from before? `uv tool upgrade search-claude-history` keeps searching only Claude Code, and `sch --default-agents all` adds the other agents. To switch to the full package instead, run `uv tool uninstall search-claude-history` first and then `uv tool install search-clanker-history`, because `uv tool install` refuses to replace an existing `sch` without `--force`. The `search_claude_history` Python module no longer contains code, since the code now lives in `search_clanker_history`.
 
 ## Usage
 

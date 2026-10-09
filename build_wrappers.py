@@ -1,9 +1,9 @@
 """Generate the wrapper packages that install search-clanker-history with a default agent scope.
 
-search-clanker-history is the only codebase. A wrapper contains no code: it depends on the same
-version of search-clanker-history and installs commands that start the same entry point. The tool
-sees which wrapper packages are installed (_WRAPPER_AGENTS in cli.py) and uses their agents as its
-default scope, which a saved --default-agents choice overrides.
+search-clanker-history is the only codebase. A wrapper is metadata only: it depends on the same
+version of search-clanker-history, installs commands that start the same entry point, and declares
+its default agent as an entry point in the search_clanker_history.default_agents group. The tool
+reads that metadata to find its default scope, which a saved --default-agents choice overrides.
 
 Usage: python build_wrappers.py [OUT_DIR] [PACKAGE ...]   (default OUT_DIR: dist-wrappers)
 """
@@ -46,9 +46,13 @@ ripgrep = ["{core}[ripgrep]=={version}"]
 [project.scripts]
 {name} = "_search_clanker_history_entry:main"
 sch = "_search_clanker_history_entry:main"
-'''
 
-INIT = '"""{name}: installs search-clanker-history, which searches {label} by default."""\n'
+[project.entry-points."search_clanker_history.default_agents"]
+{agent} = "search_clanker_history"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+'''
 
 README = '''# {name}
 
@@ -67,7 +71,9 @@ sch --default-agents all               # every agent that has history
 sch --default-agents reset             # back to {label} only
 ```
 
-`sch --agent AGENT` overrides the default for a single search. The choice is saved in `~/.config/search-history/config.json`.
+`sch --agent AGENT` overrides the default for a single search. The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set), and `sch --default-agents` prints the exact path.
+
+Already have an older `search-claude-history`? `uv tool upgrade {name}` keeps your behavior, and `sch --default-agents all` adds the other agents.
 '''
 
 
@@ -80,27 +86,17 @@ def core_version():
 
 def build(name, out_root):
     spec = WRAPPERS[name]
-    module = name.replace("-", "_")
     values = {
-        "name": name, "module": module, "version": core_version(), "core": CORE,
+        "name": name, "version": core_version(), "core": CORE,
         "repository": REPOSITORY, **spec,
     }
     out = out_root / name
     if out.exists():
         shutil.rmtree(out)
-    package = out / "src" / module
-    package.mkdir(parents=True)
-    files = {
-        out / "pyproject.toml": PYPROJECT.format(**values),
-        out / "README.md": README.format(**values),
-        package / "__init__.py": INIT.format(**values),
-    }
-    for path, text in files.items():
-        path.write_text(text)
-        if path.suffix == ".py":
-            compile(text, str(path), "exec")
-    for extra in ("LICENSE", ".python-version"):
-        shutil.copy(ROOT / extra, out / extra)
+    out.mkdir(parents=True)
+    (out / "pyproject.toml").write_text(PYPROJECT.format(**values))
+    (out / "README.md").write_text(README.format(**values))
+    shutil.copy(ROOT / "LICENSE", out / "LICENSE")
     return out
 
 

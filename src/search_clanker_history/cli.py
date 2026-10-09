@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import concurrent.futures
+import functools
 import itertools
 import json
 import mmap
@@ -26,22 +27,27 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+
+def _env_path(name, default):
+    """A path from an environment variable; an unset or empty variable means the default."""
+    return Path(os.environ.get(name) or default)
+
+
 def _claude_roots():
-    return [Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "projects"]
+    return [_env_path("CLAUDE_CONFIG_DIR", Path.home() / ".claude") / "projects"]
 
 
 def _codex_roots():
-    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    home = _env_path("CODEX_HOME", Path.home() / ".codex")
     return [home / "sessions", home / "archived_sessions"]
 
 
 def _opencode_db():
-    data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return data / "opencode" / "opencode.db"
+    return _env_path("XDG_DATA_HOME", Path.home() / ".local" / "share") / "opencode" / "opencode.db"
 
 
 def _hermes_db():
-    return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "state.db"
+    return _env_path("HERMES_HOME", Path.home() / ".hermes") / "state.db"
 
 
 _DIST_NAME = "search-clanker-history"
@@ -861,49 +867,84 @@ SOURCES = {
 
 
 def _config_path():
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "search-history" / "config.json"
+    return _env_path("XDG_CONFIG_HOME", Path.home() / ".config") / "search-history" / "config.json"
 
 
+def _warn(message):
+    print(f"warning: {message}", file=sys.stderr)
+
+
+def _read_config():
+    """The saved settings as a dict; a missing, unreadable, or malformed file reads as empty, with a warning."""
+    path = _config_path()
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        _warn(f"ignoring {path}: {e}")
+        return {}
+    if not isinstance(data, dict):
+        _warn(f"ignoring {path}: expected a JSON object")
+        return {}
+    return data
+
+
+@functools.lru_cache(maxsize=None)
 def _read_config_agents():
     """The agents the user chose with --default-agents (["all"] for every agent), or None."""
-    try:
-        agents = json.loads(_config_path().read_text()).get("agents")
-    except (OSError, ValueError, AttributeError):
+    agents = _read_config().get("agents")
+    if agents is None:
         return None
-    return agents if isinstance(agents, list) and all(isinstance(a, str) for a in agents) else None
+    path = _config_path()
+    if not (isinstance(agents, list) and agents and all(isinstance(a, str) for a in agents)):
+        _warn(f"ignoring the agents setting in {path}: expected a non-empty list of agent names")
+        return None
+    unknown = [a for a in agents if a != "all" and a not in SOURCES]
+    if unknown:
+        _warn(f"ignoring unknown agents in {path}: {', '.join(unknown)} (known: {', '.join(sorted(SOURCES))})")
+        agents = [a for a in agents if a not in unknown]
+    return agents or None
 
 
 def _write_config_agents(agents):
-    """Store the default agents; None removes the setting."""
+    """Save the default agents (None removes the setting), keeping any other saved settings."""
     path = _config_path()
+    data = _read_config()
     if agents is None:
-        path.unlink(missing_ok=True)
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"agents": agents}) + "\n")
+        data.pop("agents", None)
+    else:
+        data["agents"] = agents
+    try:
+        if data:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(json.dumps(data, indent=2) + "\n")
+            os.replace(temporary, path)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"error: cannot save the default agents in {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+    _read_config_agents.cache_clear()
 
 
-# Wrapper packages (see build_wrappers.py) install this tool with a default scope. They contain no
-# code, so which agents a plain `sch` searches comes from which wrappers are installed, whichever
-# script of theirs or ours runs.
-_WRAPPER_AGENTS = {"search-claude-history": "claude", "search-codex-history": "codex"}
+# Wrapper packages (see build_wrappers.py) contain no code. Each declares the agent it defaults to as an
+# entry point in this group, so which agents a plain `sch` searches comes from the installed metadata,
+# whichever script of theirs or ours runs. Nothing is imported from the entry point.
+_DEFAULT_AGENTS_GROUP = "search_clanker_history.default_agents"
 
 
-def _installed_wrappers():
-    from importlib.metadata import PackageNotFoundError, version
+@functools.lru_cache(maxsize=None)
+def _wrapper_packages():
+    """[(distribution name, agent)] for every installed package that declares a default agent."""
+    from importlib.metadata import distributions
     found = []
-    for name in _WRAPPER_AGENTS:
-        try:
-            version(name)
-        except PackageNotFoundError:
-            continue
-        found.append(name)
-    return found
-
-
-def _package_default():
-    """The agents of the installed wrapper packages, or None when there are none."""
-    return [_WRAPPER_AGENTS[name] for name in _installed_wrappers()] or None
+    for dist in distributions():
+        for entry in dist.entry_points:
+            if entry.group == _DEFAULT_AGENTS_GROUP:
+                found.append((dist.metadata["Name"], entry.name))
+    return sorted(found)
 
 
 def _default_agents():
@@ -914,24 +955,26 @@ def _default_agents():
     configured = _read_config_agents()
     if configured is not None:
         return (None if configured == ["all"] else configured), "config file"
-    package_default = _package_default()
+    package_default = [agent for _, agent in _wrapper_packages() if agent in SOURCES]
     if package_default:
         return package_default, "package default"
     return None, "built-in default"
 
 
-def _scope_description():
-    names, _ = _default_agents()
-    return "searching " + ", ".join(SOURCES[n][2] for n in (names or SOURCES) if n in SOURCES) + " by default"
+def _describe_default_agents():
+    names, source = _default_agents()
+    return f"{', '.join(SOURCES[n][2] for n in names) if names else 'every agent with history'} ({source})"
 
 
 def _show_default_agents():
     names, source = _default_agents()
     print(f"default agents: {', '.join(names) if names else 'every agent with history'} ({source})")
+    print(f"settings file: {_config_path()}")
 
 
 def _set_default_agents(values):
     """Handle `--default-agents VALUES`: show, set, or reset (remove) the saved default."""
+    values = list(dict.fromkeys(values))
     if not values:
         _show_default_agents()
     elif values == ["reset"]:
@@ -943,6 +986,18 @@ def _set_default_agents(values):
     else:
         print("error: use 'all' or 'reset' alone, or a list of agents", file=sys.stderr)
         sys.exit(2)
+
+
+class _VersionAction(argparse.Action):
+    """--version, built only when asked: the version, the installed package names, and the default scope."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, help="Show the version and default agents")
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        packages = ", ".join(name for name, _ in _wrapper_packages()) or _DIST_NAME
+        print(f"{parser.prog} {_get_version()} ({packages}); default agents: {_describe_default_agents()}")
+        parser.exit()
 
 
 def format_role(role):
@@ -957,11 +1012,9 @@ def format_role(role):
 def main():
     parser = argparse.ArgumentParser(
         description=f"Search {', '.join(v[2] for v in SOURCES.values())} session history",
+        allow_abbrev=False,  # --default-agents saves a setting, so it is reachable only by its full name
     )
-    parser.add_argument(
-        "-V", "--version", action="version",
-        version=f"%(prog)s {_get_version()} ({', '.join(_installed_wrappers()) or _DIST_NAME}), {_scope_description()}",
-    )
+    parser.add_argument("-V", "--version", action=_VersionAction)
     parser.add_argument("pattern", nargs="?", help="Search pattern (supports regex)")
     parser.add_argument(
         "--agent", action="append", choices=sorted(SOURCES), metavar="AGENT",
@@ -1009,6 +1062,8 @@ def main():
     args = parser.parse_args()
 
     if args.default_agents is not None:
+        if args.pattern is not None or args.agent:
+            parser.error("--default-agents changes a setting and cannot be combined with a search or --agent")
         _set_default_agents(args.default_agents)
         return
     if not args.pattern:
@@ -1016,15 +1071,20 @@ def main():
 
     _init_color(force_no_color=args.no_color)
 
+    scoped, source = (None, None) if args.agent else _default_agents()
     if args.agent:
         names = list(dict.fromkeys(args.agent))
         missing = [n for n in names if not SOURCES[n][1]()]
     else:
-        scoped, _ = _default_agents()
         names = [n for n in (scoped if scoped is not None else SOURCES) if n in SOURCES and SOURCES[n][1]()]
         missing = [] if names else (scoped or ["agent"])
+    unsearched = [SOURCES[n][2] for n in SOURCES if scoped is not None and n not in names and SOURCES[n][1]()]
+    hint = (f"not searched: {', '.join(unsearched)}; the default agents come from the {source}, "
+            f"use --agent or `{parser.prog} --default-agents all`") if unsearched else None
     if missing:
         print(f"Error: no {', '.join(missing)} history found", file=sys.stderr)
+        if hint:
+            print(hint, file=sys.stderr)
         sys.exit(1)
 
     def accepted(hit):
@@ -1089,6 +1149,8 @@ def main():
 
     if printed_count == 0:
         print("No matches found.")
+        if hint:
+            print(hint, file=sys.stderr)
     else:
         print(f"\n{DIM()}{printed_count} match(es){RESET()}")
 

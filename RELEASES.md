@@ -1,8 +1,8 @@
 # Packages and releases
 
-`search-clanker-history` is the only codebase. `search-claude-history` and `search-codex-history` are wrapper packages that `build_wrappers.py` generates from it at release time. A wrapper contains no code: its metadata depends on the same version of `search-clanker-history`, and its `sch` and package-named commands start the same entry point. `search-clanker-history` knows which wrapper packages are installed (`_WRAPPER_AGENTS` in `cli.py`) and uses their agents as its default scope. A saved `sch --default-agents` choice, kept in `~/.config/search-history/config.json`, overrides that default, and `--agent` overrides both for one search. Installing two wrappers into one environment searches both agents.
+`search-clanker-history` is the only codebase. `search-claude-history` and `search-codex-history` are wrapper packages that `build_wrappers.py` generates from it at release time. A wrapper is metadata only: it depends on the same version of `search-clanker-history`, its `sch` and package-named commands start the same entry point, and it declares its default agent as an entry point in the `search_clanker_history.default_agents` group. The core reads that metadata (it imports nothing from it) to find the default scope, so an old release of `search-claude-history` that has no such entry point does not narrow anything. A saved `sch --default-agents` choice, kept in `~/.config/search-history/config.json`, overrides that default, and `--agent` overrides both for one search.
 
-The wrappers do not depend on the order of installation: when a wrapper and the core are installed together, both write `bin/sch`, and either script behaves the same because the scope comes from the installed wrapper metadata.
+Every package declares `sch`, because `uv tool install X` exposes only the commands that X itself declares. When a wrapper and the core share an environment, both write `bin/sch`, and either script behaves the same because the scope comes from the installed metadata. The packages share that file, so removing one of them from an environment that holds another deletes `sch`, and the remaining package needs a reinstall. That is why the documentation tells users to install one package and change a setting instead of installing a second one.
 
 ```bash
 uv --no-config run --locked python build_wrappers.py                  # both wrappers into dist-wrappers/
@@ -10,7 +10,7 @@ uv --no-config run --locked python build_wrappers.py out search-codex-history   
 cd dist-wrappers/search-codex-history && uv --no-config build --no-sources
 ```
 
-To add a wrapper, add it to `WRAPPERS` in `build_wrappers.py` and to `_WRAPPER_AGENTS` in `cli.py`. `tests/test_wrappers.py` generates the wrappers and checks their metadata, that they contain no code, and that the default scope follows the installed wrapper.
+To add a wrapper, add it to `WRAPPERS` in `build_wrappers.py`; the core needs no change. `tests/test_wrappers.py` generates the wrappers and checks that they are metadata only, and that the default scope follows the installed wrappers' metadata, the saved setting, and `--agent`.
 
 ## Publishing
 
@@ -23,4 +23,4 @@ The first release creates three projects, and PyPI allows only one pending publi
 4. Re-run the failed job. `--check-url` skips the files already uploaded, so only codex uploads, and the GitHub Release job then runs.
 5. Rerun `release.py publish`, which confirms all three versions from the existing tag.
 
-Later releases need none of this. All three projects take the version in the root `pyproject.toml`.
+Later releases need none of this. All three projects take the version in the root `pyproject.toml`. If a release is yanked, yank all three projects' files together: an exact `==` pin still selects a yanked core, so yanking only the core leaves wrapper users on it.
