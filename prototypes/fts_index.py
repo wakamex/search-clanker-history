@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
-    "cli", Path(__file__).resolve().parent.parent / "src/search_claude_history/cli.py")
+    "cli", Path(__file__).resolve().parent.parent / "src/search_clanker_history/cli.py")
 cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 
