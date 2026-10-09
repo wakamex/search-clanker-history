@@ -11,6 +11,7 @@ jobs:
   validate:
     uses: wakamex/release-actions/.github/workflows/python-validation.yml@stable
 
+  # One tag publishes the three packages generated from this source tree (see RELEASES.md).
   publish:
     needs: validate
     runs-on: ubuntu-24.04
@@ -20,7 +21,22 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+      - name: Generate the packages
+        run: uv --no-config run --locked python build_variants.py dist-variants
       - uses: wakamex/release-actions/pypi-publish@stable
+        with:
+          working-directory: dist-variants/search-clanker-history
+      - uses: wakamex/release-actions/pypi-publish@stable
+        with:
+          working-directory: dist-variants/search-claude-history
+      # Keep codex last. On the first release its pending publisher can only be registered after
+      # search-clanker-history exists, so this step fails until then and a rerun finishes it (RELEASES.md).
+      - uses: wakamex/release-actions/pypi-publish@stable
+        with:
+          working-directory: dist-variants/search-codex-history
 
   github-release:
     needs: publish
