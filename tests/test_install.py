@@ -51,31 +51,31 @@ class InstalledPackageTests(unittest.TestCase):
         env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / "config"), NO_COLOR="1")
         return subprocess.run([str(venv / "bin" / command), *args], capture_output=True, text=True, env=env, check=False)
 
-    def test_each_wrapper_installs_sch_with_its_default_agents(self):
+    def test_each_wrapper_installs_its_own_command_with_its_default_agents(self):
         for package, scope in (("search-claude-history", "Claude Code"), ("search-codex-history", "Codex")):
             with self.subTest(package=package):
                 venv = self.venv(f"venv-{package}")
                 self.install(venv, package)
-                for command in ("sch", package):
-                    result = self.run_command(venv, command, "--version")
-                    self.assertIn(f"({package}); default agents: {scope} (package default)", result.stdout)
+                result = self.run_command(venv, package, "--version")
+                self.assertIn(f"({package}); default agents: {scope} (package default)", result.stdout)
+                self.assertFalse((venv / "bin" / "sch").exists())
 
     def test_the_core_package_searches_every_agent_by_default(self):
         venv = self.venv("venv-core")
         self.install(venv, "search-clanker-history")
-        result = self.run_command(venv, "sch", "--version")
+        result = self.run_command(venv, "search-clanker-history", "--version")
         self.assertIn("(search-clanker-history); default agents: every agent with history", result.stdout)
 
-    def test_removing_a_wrapper_leaves_the_core_command_and_a_reinstall_restores_sch(self):
+    def test_removing_a_wrapper_leaves_the_other_commands_working(self):
+        """Every command belongs to one package, so removing one package removes nothing the others own."""
         venv = self.venv("venv-removal")
-        self.install(venv, "search-claude-history")
+        self.install(venv, "search-claude-history", "search-codex-history")
         subprocess.run(["uv", "pip", "uninstall", "-q", "--python", str(venv / "bin" / "python"), "search-claude-history"],
                        check=True, capture_output=True)
-        core = self.run_command(venv, "search-clanker-history", "--version")
-        self.assertIn("default agents: every agent with history", core.stdout)
-        self.install(venv, "search-clanker-history", reinstall=True)
-        self.assertTrue((venv / "bin" / "sch").exists())
-        self.assertIn("sch", self.run_command(venv, "sch", "--version").stdout)
+        self.assertFalse((venv / "bin" / "search-claude-history").exists())
+        for command in ("search-codex-history", "search-clanker-history"):
+            # the remaining wrapper still sets the default, whichever command runs
+            self.assertIn("default agents: Codex (package default)", self.run_command(venv, command, "--version").stdout)
 
 
 if __name__ == "__main__":

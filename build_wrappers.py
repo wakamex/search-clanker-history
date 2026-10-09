@@ -1,7 +1,7 @@
 """Generate the wrapper packages that install search-clanker-history with a default agent scope.
 
 search-clanker-history is the only codebase. A wrapper is metadata only: it depends on the same
-version of search-clanker-history, installs commands that start the same entry point, and declares
+version of search-clanker-history, installs a command named after itself that starts the same entry point, and declares
 its default agent as an entry point in the search_clanker_history.default_agents group. The tool
 reads that metadata to find its default scope, which a saved --default-agents choice overrides.
 
@@ -45,7 +45,6 @@ ripgrep = ["{core}[ripgrep]=={version}"]
 
 [project.scripts]
 {name} = "_search_clanker_history_entry:main"
-sch = "_search_clanker_history_entry:main"
 
 [project.entry-points."search_clanker_history.default_agents"]
 {agent} = "search_clanker_history"
@@ -56,24 +55,24 @@ bypass-selection = true
 
 README = '''# {name}
 
-This package installs [{core}]({repository}) and makes `sch` search {label} by default. The code is the same as in `{core}`, which is also where the documentation lives.
+This package installs [{core}]({repository}) and makes `{name}` search {label} by default. The code is the same as in `{core}`, which is also where the documentation lives.
 
 ```bash
 uv tool install {name}
-sch "pattern"
+{name} "pattern"
 ```
 
 To search other agents as well, change the default once, with no reinstall:
 
 ```bash
-sch --default-agents {agent} {other}     # for example, add another agent
-sch --default-agents all               # every agent that has history
-sch --default-agents reset             # back to {label} only
+{name} --default-agents {agent} {other}     # for example, add another agent
+{name} --default-agents all               # every agent that has history
+{name} --default-agents reset             # back to {label} only
 ```
 
-`sch --agent AGENT` overrides the default for a single search. The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set, and in `%APPDATA%\\search-history\\config.json` on Windows), and `sch --default-agents` prints the exact path.
+`{name} --agent AGENT` overrides the default for a single search. The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set, and in `%APPDATA%\\search-history\\config.json` on Windows), and `{name} --default-agents` prints the exact path. The settings file is shared by every package, so a default you save applies to all of them.
 
-Already have an older `search-claude-history`? `uv tool upgrade {name}` keeps your behavior, and `sch --default-agents all` adds the other agents.
+Already have an older `search-claude-history`? `uv tool upgrade {name}` keeps your behavior, but the short command `sch` is gone; use `{name}`, or make `sch` an alias for it. `{name} --default-agents all` adds the other agents.
 '''
 
 

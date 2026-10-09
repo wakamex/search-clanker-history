@@ -36,7 +36,6 @@ class CliTests(unittest.TestCase):
     def test_entry_points_report_the_package_version(self):
         expected = version("search-clanker-history")
         for args in (
-            ("sch", "--version"),
             ("search-clanker-history", "--version"),
             (sys.executable, "-m", "search_clanker_history", "--version"),
         ):
@@ -62,8 +61,8 @@ class CliTests(unittest.TestCase):
                 + "\n"
             )
 
-            found = self.run_cli("sch", "frobnicate", config_dir=config_dir, home=temporary)
-            missing = self.run_cli("sch", "no-such-text", config_dir=config_dir, home=temporary)
+            found = self.run_cli("search-clanker-history", "frobnicate", config_dir=config_dir, home=temporary)
+            missing = self.run_cli("search-clanker-history", "no-such-text", config_dir=config_dir, home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("where is the frobnicate helper", found.stdout)
@@ -96,9 +95,9 @@ class CliTests(unittest.TestCase):
                 "\n".join(json.dumps(item) for item in lines) + "\n"
             )
 
-            plain = self.run_cli("sch", "quuxify", "--agent", "codex", "-A", "1", home=temporary)
-            tools = self.run_cli("sch", "quuxify", "--tools", home=temporary)
-            by_project = self.run_cli("sch", "quuxify", "-p", "nothing", home=temporary)
+            plain = self.run_cli("search-clanker-history", "quuxify", "--agent", "codex", "-A", "1", home=temporary)
+            tools = self.run_cli("search-clanker-history", "quuxify", "--tools", home=temporary)
+            by_project = self.run_cli("search-clanker-history", "quuxify", "-p", "nothing", home=temporary)
 
         self.assertEqual(plain.returncode, 0, plain.stderr)
         self.assertIn("| codex | -code-demo | session:01a10334", plain.stdout)
@@ -134,7 +133,7 @@ class CliTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
-            found = self.run_cli("sch", "zorbify", "-t", "assistant", home=temporary)
+            found = self.run_cli("search-clanker-history", "zorbify", "-t", "assistant", home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("| opencode | -code-demo | session:ses_abc1", found.stdout)
@@ -163,8 +162,8 @@ class CliTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
-            found = self.run_cli("sch", "locate the blorpify", "-A", "1", home=temporary)
-            other = self.run_cli("sch", "blorpify", "--agent", "codex", home=temporary)
+            found = self.run_cli("search-clanker-history", "locate the blorpify", "-A", "1", home=temporary)
+            other = self.run_cli("search-clanker-history", "blorpify", "--agent", "codex", home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("| hermes | cli | session:20260102", found.stdout)
@@ -190,7 +189,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)
             self.write_sessions(config_dir, 4)
-            found = self.run_cli("sch", "needle", "-n", "2", config_dir=config_dir, home=temporary)
+            found = self.run_cli("search-clanker-history", "needle", "-n", "2", config_dir=config_dir, home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertNotIn("session 0", found.stdout)
@@ -202,7 +201,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)
             self.write_sessions(config_dir, 1)
-            found = self.run_cli("sch", "needle", "-B", "1", "-A", "1", "-C", "30", config_dir=config_dir, home=temporary)
+            found = self.run_cli("search-clanker-history", "needle", "-B", "1", "-A", "1", "-C", "30", config_dir=config_dir, home=temporary)
 
         self.assertIn("filler before 0", found.stdout)
         self.assertIn("reply 0", found.stdout)
@@ -211,7 +210,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)
             self.write_sessions(config_dir, 3)
-            found = self.run_cli("sch", "needle", "--since", "2026-01-01T12:00:00Z", config_dir=config_dir, home=temporary)
+            found = self.run_cli("search-clanker-history", "needle", "--since", "2026-01-01T12:00:00Z", config_dir=config_dir, home=temporary)
 
         self.assertNotIn("session 0", found.stdout)
         self.assertIn("session 1", found.stdout)
@@ -221,7 +220,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)
             self.write_sessions(config_dir, 2)
-            found = self.run_cli("sch", "needle(?= in session 1)", config_dir=config_dir, home=temporary)
+            found = self.run_cli("search-clanker-history", "needle(?= in session 1)", config_dir=config_dir, home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("needle in session 1", found.stdout)

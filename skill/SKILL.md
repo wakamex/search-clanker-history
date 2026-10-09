@@ -23,11 +23,13 @@ Use this proactively when:
 
 Before using this skill, check if the tool is available:
 
+This skill writes `sch` for the command. The installed command is named after the package: `search-clanker-history`, or `search-claude-history` / `search-codex-history` for the packages that default to one agent. Many people alias it to `sch`. Check which one exists:
+
 ```bash
-which sch
+which sch search-clanker-history search-claude-history search-codex-history
 ```
 
-**If installed:** Use `sch` directly (commands shown below).
+**If installed:** Use whichever exists, in place of `sch` in the commands below.
 
 **If not installed:** Use `uvx search-clanker-history` instead. All `sch` commands below can be run as:
 ```bash

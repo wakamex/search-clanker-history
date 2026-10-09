@@ -50,8 +50,8 @@ class WrapperBuildTests(unittest.TestCase):
         self.assertIn('name = "search-codex-history"', pyproject)
         self.assertIn(f'dependencies = ["search-clanker-history=={self.version}"]', pyproject)
         self.assertIn(f'ripgrep = ["search-clanker-history[ripgrep]=={self.version}"]', pyproject)
-        self.assertIn('sch = "_search_clanker_history_entry:main"', pyproject)
         self.assertIn('search-codex-history = "_search_clanker_history_entry:main"', pyproject)
+        self.assertNotIn("sch =", pyproject)
         for name in build_wrappers.WRAPPERS:
             self.assertTrue((self.out / name / "LICENSE").is_file())
 
@@ -60,7 +60,8 @@ class WrapperBuildTests(unittest.TestCase):
             files = sorted(p.name for p in (self.out / name).rglob("*") if p.is_file())
             self.assertEqual(files, ["LICENSE", "README.md", "pyproject.toml"])
             pyproject = (self.out / name / "pyproject.toml").read_text()
-            self.assertIn('sch = "_search_clanker_history_entry:main"', pyproject)
+            self.assertIn(f'{name} = "_search_clanker_history_entry:main"', pyproject)
+            self.assertNotIn("sch =", pyproject)
             self.assertIn(f'{spec["agent"]} = "search_clanker_history"', pyproject)
             self.assertIn("bypass-selection = true", pyproject)
 

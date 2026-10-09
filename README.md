@@ -7,6 +7,8 @@ Search across your coding-agent session history for keywords or patterns. It cov
 - [OpenCode](https://github.com/anomalyco/opencode)
 - [Hermes](https://github.com/NousResearch/hermes-agent)
 
+In the examples, `sch` stands for the command, `search-clanker-history` (see Packages and commands below for a one-line alias).
+
 ```
 $ sch "git-log-list"
 ── 2026-02-17 05:35 | claude | -code-rb | session:720d82ef ──
@@ -42,11 +44,11 @@ uv tool install "search-clanker-history[ripgrep]"
 
 Requires [uv](https://docs.astral.sh/uv/getting-started/installation/). No system Python needed.
 
-### Packages
+### Packages and commands
 
-`search-clanker-history` is the tool. `search-claude-history` and `search-codex-history` install the same tool with a different default: `search-claude-history` searches only Claude Code unless you say otherwise, and `search-codex-history` only Codex. Each one installs the `sch` command and a command named after the package, and `sch --version` shows which package you have and which agents it searches by default. Install one of them, not several: they all provide `sch`, and removing one package from an environment that holds another deletes the shared `sch` (reinstall the one you keep, with `uv tool install --reinstall PACKAGE`, to get it back).
+`search-clanker-history` is the tool, and its command is `search-clanker-history`. `search-claude-history` and `search-codex-history` install the same tool with a different default, each under its own command: `search-claude-history` searches only Claude Code unless you say otherwise, and `search-codex-history` only Codex. Every command name is unique to its package, so any mix of the three can be installed side by side. The examples below write `sch` for the command; make it a shell alias for the one you installed, for example `alias sch=search-clanker-history`.
 
-Change what a plain `sch` searches at any time, with no reinstall:
+Change what a plain search covers at any time, with no reinstall:
 
 ```bash
 sch --default-agents                 # show the current default and where it is saved
@@ -55,9 +57,9 @@ sch --default-agents all             # search every agent that has history
 sch --default-agents reset           # back to the package's own default
 ```
 
-The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set, and in `%APPDATA%\search-history\config.json` on Windows). `--agent` overrides it for a single search. When the default hides history from other agents, `sch` says so after a search that finds nothing.
+The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set, and in `%APPDATA%\search-history\config.json` on Windows) and shared by every package. `--agent` overrides it for a single search. When the default hides history from other agents, the command says so after a search that finds nothing, and `--version` shows which package is running and where the default comes from.
 
-Already have `search-claude-history` from before? `uv tool upgrade search-claude-history` keeps searching only Claude Code, and `sch --default-agents all` adds the other agents. To switch to the full package instead, run `uv tool uninstall search-claude-history` first and then `uv tool install search-clanker-history`, because `uv tool install` refuses to replace an existing `sch` without `--force`. The `search_claude_history` Python module no longer contains code, since the code now lives in `search_clanker_history`.
+Already have `search-claude-history` from before? `uv tool upgrade search-claude-history` keeps searching only Claude Code, and `search-claude-history --default-agents all` adds the other agents. The short command `sch` is no longer installed, so use the long name or an alias. The `search_claude_history` Python module no longer contains code, since the code now lives in `search_clanker_history`.
 
 ## Usage
 
@@ -136,7 +138,7 @@ curl -o ~/.claude/skills/search-history/SKILL.md https://raw.githubusercontent.c
 
 Or manually download [`SKILL.md`](https://github.com/wakamex/search-clanker-history/blob/main/skill/SKILL.md) into `~/.claude/skills/search-history/`.
 
-**Note:** The skill works with or without installing the tool. If `sch` is not installed, Claude will use `uvx search-clanker-history` (requires [uv](https://docs.astral.sh/uv/)).
+**Note:** The skill works with or without installing the tool. If the command is not installed, Claude will use `uvx search-clanker-history` (requires [uv](https://docs.astral.sh/uv/)).
 
 ### How It Works
 
