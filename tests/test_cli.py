@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,8 +19,12 @@ def record(role, text, timestamp):
 
 
 class CliTests(unittest.TestCase):
-    def run_cli(self, *args, config_dir=None):
+    def run_cli(self, *args, config_dir=None, home=None):
         env = dict(os.environ, NO_COLOR="1")
+        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR"):
+            env.pop(name, None)
+        if home is not None:
+            env["HOME"] = str(home)
         if config_dir is not None:
             env["CLAUDE_CONFIG_DIR"] = str(config_dir)
         return subprocess.run(
@@ -55,14 +60,170 @@ class CliTests(unittest.TestCase):
                 + "\n"
             )
 
-            found = self.run_cli("sch", "frobnicate", config_dir=config_dir)
-            missing = self.run_cli("sch", "no-such-text", config_dir=config_dir)
+            found = self.run_cli("sch", "frobnicate", config_dir=config_dir, home=temporary)
+            missing = self.run_cli("sch", "no-such-text", config_dir=config_dir, home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("where is the frobnicate helper", found.stdout)
         self.assertIn("-code-demo", found.stdout)
         self.assertNotIn("it lives in utils", found.stdout)
         self.assertNotIn("where is the frobnicate helper", missing.stdout)
+
+    def test_codex_rollouts_are_searched_with_cwd_project_and_tool_filtering(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            day = Path(temporary) / ".codex" / "sessions" / "2026" / "01" / "02"
+            day.mkdir(parents=True)
+            sid = "01a10334-5465-7210-a943-b674c6eea5b6"
+            lines = [
+                {"timestamp": "2026-01-02T03:04:04Z", "type": "session_meta",
+                 "payload": {"id": sid, "cwd": "/code/demo"}},
+                {"timestamp": "2026-01-02T03:04:05Z", "type": "response_item",
+                 "payload": {"type": "message", "role": "user",
+                             "content": [{"type": "input_text", "text": "find the quuxify helper"}]}},
+                {"timestamp": "2026-01-02T03:04:06Z", "type": "response_item",
+                 "payload": {"type": "message", "role": "developer",
+                             "content": [{"type": "input_text", "text": "quuxify developer note"}]}},
+                {"timestamp": "2026-01-02T03:04:07Z", "type": "response_item",
+                 "payload": {"type": "function_call", "name": "shell",
+                             "arguments": "{\"cmd\": \"grep quuxify\"}", "call_id": "c1"}},
+                {"timestamp": "2026-01-02T03:04:08Z", "type": "response_item",
+                 "payload": {"type": "message", "role": "assistant",
+                             "content": [{"type": "output_text", "text": "quuxify is in utils"}]}},
+            ]
+            (day / f"rollout-2026-01-02T03-04-04-{sid}.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in lines) + "\n"
+            )
+
+            plain = self.run_cli("sch", "quuxify", "--agent", "codex", "-A", "1", home=temporary)
+            tools = self.run_cli("sch", "quuxify", "--tools", home=temporary)
+            by_project = self.run_cli("sch", "quuxify", "-p", "nothing", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("| codex | -code-demo | session:01a10334", plain.stdout)
+        self.assertIn("find the quuxify helper", plain.stdout)
+        self.assertIn("quuxify is in utils", plain.stdout)
+        self.assertNotIn("developer note", plain.stdout)
+        self.assertNotIn("[shell:", plain.stdout)
+        self.assertIn("[shell:", tools.stdout)
+        self.assertIn("No matches found.", by_project.stdout)
+
+    def test_opencode_database_is_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            db_dir = Path(temporary) / ".local" / "share" / "opencode"
+            db_dir.mkdir(parents=True)
+            conn = sqlite3.connect(db_dir / "opencode.db")
+            conn.executescript(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);"
+                "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);"
+                "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,"
+                " time_created INTEGER, data TEXT);"
+            )
+            conn.execute("INSERT INTO session VALUES ('ses_abc12345', '/code/demo')")
+            conn.execute("INSERT INTO message VALUES ('m1', 'ses_abc12345', ?)", (json.dumps({"role": "user"}),))
+            conn.execute("INSERT INTO message VALUES ('m2', 'ses_abc12345', ?)", (json.dumps({"role": "assistant"}),))
+            parts = [
+                ("p1", "m1", 1767323045000, {"type": "text", "text": "where is the zorbify helper"}),
+                ("p2", "m2", 1767323046000, {"type": "text", "text": "zorbify lives in utils"}),
+            ]
+            for pid, mid, created, data in parts:
+                conn.execute(
+                    "INSERT INTO part VALUES (?, ?, 'ses_abc12345', ?, ?)", (pid, mid, created, json.dumps(data))
+                )
+            conn.commit()
+            conn.close()
+
+            found = self.run_cli("sch", "zorbify", "-t", "assistant", home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("| opencode | -code-demo | session:ses_abc1", found.stdout)
+        self.assertIn("zorbify lives in utils", found.stdout)
+        self.assertNotIn("where is the zorbify helper", found.stdout)
+
+    def test_hermes_database_is_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            hermes = Path(temporary) / ".hermes"
+            hermes.mkdir()
+            conn = sqlite3.connect(hermes / "state.db")
+            conn.executescript(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, cwd TEXT);"
+                "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,"
+                " role TEXT, content TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL);"
+            )
+            conn.execute("INSERT INTO sessions VALUES ('20260102_abc', 'cli', NULL)")
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp) VALUES"
+                " ('20260102_abc', 'user', 'locate the blorpify helper', 1767323045.0)"
+            )
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp) VALUES"
+                " ('20260102_abc', 'assistant', 'blorpify is in utils', 1767323046.0)"
+            )
+            conn.commit()
+            conn.close()
+
+            found = self.run_cli("sch", "locate the blorpify", "-A", "1", home=temporary)
+            other = self.run_cli("sch", "blorpify", "--agent", "codex", home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("| hermes | cli | session:20260102", found.stdout)
+        self.assertIn("blorpify is in utils", found.stdout)
+        self.assertEqual(other.returncode, 1)
+        self.assertIn("no codex history found", other.stderr)
+
+    def write_sessions(self, config_dir, count):
+        project = config_dir / "projects" / "-code-demo"
+        project.mkdir(parents=True)
+        for n in range(count):
+            lines = [
+                record("user", f"filler before {n} " + "x" * 200_000, f"2026-01-0{n + 1}T00:00:00Z"),
+                record("user", f"needle in session {n}", f"2026-01-0{n + 1}T00:00:01Z"),
+                {**record("assistant", "", f"2026-01-0{n + 1}T00:00:02Z"),
+                 "message": {"role": "assistant", "content": [{"type": "text", "text": f"reply {n}"}]}},
+            ]
+            path = project / f"0123abcd-0000-0000-0000-00000000000{n}.jsonl"
+            path.write_text("\n".join(json.dumps(item) for item in lines) + "\n")
+            os.utime(path, (1_767_225_600 + n * 86_400, 1_767_225_600 + n * 86_400))
+
+    def test_limit_keeps_the_most_recent_matches_in_chronological_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 4)
+            found = self.run_cli("sch", "needle", "-n", "2", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertNotIn("session 0", found.stdout)
+        self.assertNotIn("session 1", found.stdout)
+        self.assertLess(found.stdout.index("session 2"), found.stdout.index("session 3"))
+        self.assertIn("2 match(es)", found.stdout)
+
+    def test_context_lines_are_read_around_the_match_offset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 1)
+            found = self.run_cli("sch", "needle", "-B", "1", "-A", "1", "-C", "30", config_dir=config_dir, home=temporary)
+
+        self.assertIn("filler before 0", found.stdout)
+        self.assertIn("reply 0", found.stdout)
+
+    def test_since_skips_sessions_last_modified_earlier(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 3)
+            found = self.run_cli("sch", "needle", "--since", "2026-01-01T12:00:00Z", config_dir=config_dir, home=temporary)
+
+        self.assertNotIn("session 0", found.stdout)
+        self.assertIn("session 1", found.stdout)
+        self.assertIn("session 2", found.stdout)
+
+    def test_pattern_rejected_by_ripgrep_falls_back_to_the_python_scanner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 2)
+            found = self.run_cli("sch", "needle(?= in session 1)", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("needle in session 1", found.stdout)
+        self.assertNotIn("session 0", found.stdout)
 
 
 if __name__ == "__main__":

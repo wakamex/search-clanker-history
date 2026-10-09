@@ -1,17 +1,17 @@
 ---
 name: search-history
-description: Search Claude Code conversation history with regex patterns and context. Use this skill whenever the user references past work ("a few days ago", "last week", "previously"), asks about prior conversations, wants to find when something was discussed, needs to recall specific commands/decisions/errors from earlier sessions, or mentions timing without specifics. Also use when investigating issues that may have been discussed before, or when the user asks "did we try X?" or "what was that thing we did?".
+description: Search Claude Code, Codex, OpenCode and Hermes conversation history with regex patterns and context. Use this skill whenever the user references past work ("a few days ago", "last week", "previously"), asks about prior conversations, wants to find when something was discussed, needs to recall specific commands/decisions/errors from earlier sessions, or mentions timing without specifics. Also use when investigating issues that may have been discussed before, or when the user asks "did we try X?" or "what was that thing we did?".
 ---
 
 # Search Conversation History
 
-Search across all Claude Code conversation history to find past discussions, commands, decisions, and context.
+Search across all Claude Code, Codex, OpenCode and Hermes conversation history to find past discussions, commands, decisions, and context.
 
 **Keywords**: history, past conversations, previous sessions, last week, few days ago, earlier, before, recall, find when, search logs, conversation search
 
 ## Overview
 
-The `sch` command searches through all Claude Code session history using regex patterns. It's essential for maintaining context across sessions when users reference work from hours, days, or weeks ago.
+The `sch` command searches through the session history of every supported agent (Claude Code, Codex, OpenCode, Hermes) on the machine using regex patterns. It's essential for maintaining context across sessions when users reference work from hours, days, or weeks ago.
 
 Use this proactively when:
 - User mentions timeframes without specifics ("last time", "earlier", "before")
@@ -52,11 +52,13 @@ sch [OPTIONS] PATTERN
 
 ### Key Options
 
+- `--agent AGENT` — Limit to `claude`, `codex`, `opencode`, or `hermes` (repeatable; default: all with history)
 - `-p PROJECT` — Filter to project (substring match on directory name)
 - `-t {user,assistant}` — Filter by message role
 - `-A N` — Show N messages after match
 - `-B N` — Show N messages before match
 - `-C CHARS` — Show CHARS of text context around match (default 200)
+- `-n N` — Only the N most recent matches (fast; stops reading older history early)
 - `--since TIME` — Only messages at/after TIME (ISO 8601 like `2026-04-01`, or relative: `30m`, `2h`, `1d`, `1w`)
 - `--until TIME` — Only messages at/before TIME (same formats as `--since`)
 - `--tools` — Include tool_use/tool_result messages (skipped by default)

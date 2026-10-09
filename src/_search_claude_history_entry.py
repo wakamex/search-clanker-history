@@ -1,5 +1,6 @@
 """Console entrypoint that avoids shadowing by similarly named scripts."""
 
+import sys
 from importlib.util import find_spec, module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -16,5 +17,6 @@ def main():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load CLI module from {cli_path}")
     module = module_from_spec(spec)
+    sys.modules[spec.name] = module  # lets forked search workers pickle functions by module name
     spec.loader.exec_module(module)
     return module.main()
