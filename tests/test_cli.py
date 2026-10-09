@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import sqlite3
@@ -6,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from importlib.metadata import version
+from unittest import mock
 from pathlib import Path
 
 
@@ -224,6 +226,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("needle in session 1", found.stdout)
         self.assertNotIn("session 0", found.stdout)
+
+
+class ConfigPathTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "cli_under_test", Path(__file__).resolve().parent.parent / "src" / "search_clanker_history" / "cli.py")
+        cls.cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.cli)
+
+    def config_path(self, platform, **env):
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(self.cli.sys, "platform", platform), \
+                mock.patch.object(self.cli.Path, "home", return_value=Path("/home/user")):
+            return self.cli._config_path().as_posix()
+
+    def test_config_lives_where_each_platform_expects_it(self):
+        self.assertEqual(self.config_path("linux"), "/home/user/.config/search-history/config.json")
+        self.assertEqual(self.config_path("darwin", XDG_CONFIG_HOME="/x"), "/x/search-history/config.json")
+        self.assertEqual(self.config_path("linux", XDG_CONFIG_HOME=""), "/home/user/.config/search-history/config.json")
+        self.assertEqual(self.config_path("win32", APPDATA="/appdata"), "/appdata/search-history/config.json")
+        self.assertEqual(self.config_path("win32"), "/home/user/AppData/Roaming/search-history/config.json")
 
 
 if __name__ == "__main__":

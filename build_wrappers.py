@@ -23,7 +23,7 @@ WRAPPERS = {
 }
 
 PYPROJECT = '''[build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
@@ -31,7 +31,7 @@ name = "{name}"
 version = "{version}"
 description = "Search {label} session history with search-clanker-history"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 dependencies = ["{core}=={version}"]
 
@@ -71,7 +71,7 @@ sch --default-agents all               # every agent that has history
 sch --default-agents reset             # back to {label} only
 ```
 
-`sch --agent AGENT` overrides the default for a single search. The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set), and `sch --default-agents` prints the exact path.
+`sch --agent AGENT` overrides the default for a single search. The choice is saved in `~/.config/search-history/config.json` (under `$XDG_CONFIG_HOME` when that is set, and in `%APPDATA%\\search-history\\config.json` on Windows), and `sch --default-agents` prints the exact path.
 
 Already have an older `search-claude-history`? `uv tool upgrade {name}` keeps your behavior, and `sch --default-agents all` adds the other agents.
 '''

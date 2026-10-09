@@ -20,7 +20,7 @@ The first release creates three projects, and PyPI allows only one pending publi
 1. Register `search-clanker-history`'s pending publisher and add the new repository name to `search-claude-history`'s existing trusted publisher before tagging.
 2. Tag. The core upload creates its project and the claude upload succeeds. The codex upload fails because no publisher exists for it yet.
 3. Register the `search-codex-history` pending publisher for `wakamex/search-clanker-history`, `publish.yml`, `pypi`.
-4. Re-run the failed job. `--check-url` skips the files already uploaded, so only codex uploads, and the GitHub Release job then runs.
+4. Re-run the failed job. `--check-url` skips the files already uploaded, so only codex uploads, and the GitHub Release job then runs. The rerun rebuilds every package, and a rebuilt file that differs from the uploaded one fails the job, so `build-system` pins `hatchling` to an exact version (in `pyproject.toml` and in the wrapper template in `build_wrappers.py`). With the same inputs two builds are byte-identical, so the rerun can come hours or days later. Bump the pin on purpose, and not between a first run and its rerun.
 5. Rerun `release.py publish`, which confirms all three versions from the existing tag.
 
 Later releases need none of this. All three projects take the version in the root `pyproject.toml`. If a release is yanked, yank all three projects' files together: an exact `==` pin still selects a yanked core, so yanking only the core leaves wrapper users on it.

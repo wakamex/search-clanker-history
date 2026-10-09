@@ -867,7 +867,11 @@ SOURCES = {
 
 
 def _config_path():
-    return _env_path("XDG_CONFIG_HOME", Path.home() / ".config") / "search-history" / "config.json"
+    if sys.platform == "win32":
+        base = _env_path("APPDATA", Path.home() / "AppData" / "Roaming")
+    else:
+        base = _env_path("XDG_CONFIG_HOME", Path.home() / ".config")
+    return base / "search-history" / "config.json"
 
 
 def _warn(message):
