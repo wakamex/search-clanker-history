@@ -18,8 +18,14 @@ CORE = "search-clanker-history"
 REPOSITORY = "https://github.com/wakamex/search-clanker-history"
 
 WRAPPERS = {
-    "search-claude-history": {"agent": "claude", "label": "Claude Code", "other": "codex"},
-    "search-codex-history": {"agent": "codex", "label": "Codex", "other": "claude"},
+    "search-claude-history": {
+        "agent": "claude", "label": "Claude Code", "other": "codex",
+        "keywords": ["claude-code", "claude", "anthropic", "session-history", "search", "ai-agents", "cli"],
+    },
+    "search-codex-history": {
+        "agent": "codex", "label": "Codex", "other": "claude",
+        "keywords": ["codex", "openai", "session-history", "search", "ai-agents", "cli"],
+    },
 }
 
 PYPROJECT = '''[build-system]
@@ -29,8 +35,9 @@ build-backend = "hatchling.build"
 [project]
 name = "{name}"
 version = "{version}"
-description = "Search {label} session history with search-clanker-history"
+description = "Search your {label} session history from the command line"
 readme = "README.md"
+keywords = [{keywords}]
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = ["{core}=={version}"]
@@ -55,12 +62,14 @@ bypass-selection = true
 
 README = '''# {name}
 
-This package installs [{core}]({repository}) and makes `{name}` search {label} by default. The code is the same as in `{core}`, which is also where the documentation lives.
+Search your {label} session history from the command line: find the conversation where you solved something, a command you ran, or an error you hit, with regular expressions, time filters, and surrounding context.
 
 ```bash
 uv tool install {name}
 {name} "pattern"
 ```
+
+`{name}` is a build of [{core}]({repository}), which also searches other coding agents, so it installs {core} at the same version and defaults to {label}. The documentation lives there.
 
 To search other agents as well, change the default once, with no reinstall:
 
@@ -89,6 +98,7 @@ def build(name, out_root):
         "name": name, "version": core_version(), "core": CORE,
         "repository": REPOSITORY, **spec,
     }
+    values["keywords"] = ", ".join(f'"{word}"' for word in spec["keywords"])
     out = out_root / name
     if out.exists():
         shutil.rmtree(out)

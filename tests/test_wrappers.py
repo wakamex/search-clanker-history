@@ -64,6 +64,10 @@ class WrapperBuildTests(unittest.TestCase):
             self.assertNotIn("sch =", pyproject)
             self.assertIn(f'{spec["agent"]} = "search_clanker_history"', pyproject)
             self.assertIn("bypass-selection = true", pyproject)
+            self.assertIn("keywords = [", pyproject)
+            self.assertIn(f'"{spec["keywords"][0]}"', pyproject)
+            readme = (self.out / name / "README.md").read_text()
+            self.assertTrue(readme.startswith(f"# {name}\n\nSearch your {spec['label']} session history"))
 
     def run_core(self, *args, home, config, wrappers=(), env_extra=None):
         """Run the core package with the given wrapper packages 'installed' (metadata only).
