@@ -68,6 +68,8 @@ class WrapperBuildTests(unittest.TestCase):
             self.assertIn(f'"{spec["keywords"][0]}"', pyproject)
             readme = (self.out / name / "README.md").read_text()
             self.assertTrue(readme.startswith(f"# {name}\n\nSearch your {spec['label']} session history"))
+            self.assertIn("without reinstalling anything", readme.split("```")[0])
+            self.assertIn(f"{name} --default-agents all", readme)
 
     def run_core(self, *args, home, config, wrappers=(), env_extra=None):
         """Run the core package with the given wrapper packages 'installed' (metadata only).

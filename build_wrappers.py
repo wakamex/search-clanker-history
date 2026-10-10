@@ -62,7 +62,7 @@ bypass-selection = true
 
 README = '''# {name}
 
-Search your {label} session history from the command line: find the conversation where you solved something, a command you ran, or an error you hit, with regular expressions, time filters, and surrounding context.
+Search your {label} session history from the command line: find the conversation where you solved something, a command you ran, or an error you hit, with regular expressions, time filters, and surrounding context. It searches {label} by default and can search your other coding agents too, without reinstalling anything (see below).
 
 ```bash
 uv tool install {name}
