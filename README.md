@@ -121,7 +121,7 @@ Searches use the fastest available engine:
 
 The tool uses whichever engine is available, in the order above. 
 
-Tool output is the bulk of agent history, so ripgrep's matching lines are streamed and tool-only lines are dropped by a byte check before they are decoded or parsed. `--since` skips files last modified before it, `-n` stops reading older files once enough matches are found, and `-A`/`-B` read only the lines around each match. On 15 GB of history a common word takes about 5 seconds, 0.7 seconds with `--since 1d`, and 0.9 seconds with `-n 20`. See [performance.md](https://github.com/wakamex/search-clanker-history/blob/main/performance.md) for the measurements and the ideas considered.
+Tool output is the bulk of agent history, so ripgrep's matching lines are streamed and tool-only lines are dropped by a byte check before they are decoded or parsed. `--since` skips files last modified before it, `-n` stops reading older files once enough matches are found, and `-A`/`-B` read only the lines around each match. On 15 GB of history a common word takes about 3 seconds on a quiet machine, `--since 1d` takes under a second, and `-n 20` takes about a second. Searching 13 GB of Codex history for one word, the median of 5 alternating pairs was 4.8 seconds for the search and 16.7 seconds for `grep -rli`, which only lists file names; `rg -li` took 4.0 seconds and also lists only file names. See [performance.md](https://github.com/wakamex/search-clanker-history/blob/main/performance.md) for the measurements and the ideas considered.
 
 The SQLite histories are filtered inside the database and then matched in Python.
 

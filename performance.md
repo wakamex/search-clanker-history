@@ -113,3 +113,16 @@ About 87% of the history is Codex rollouts, and most of their bytes are tool out
 The anchored regex returned every message line the parser accepts (0 missing) plus 18 lines it drops afterwards, such as developer messages. Output for `deadline --since 5d` with context still matches the unfiltered reference (61 Claude Code and 61 Codex hits). The prefix tolerates whitespace around the JSON separators and an optional `ordinal` field. A pattern that only Python's `re` accepts, such as a lookahead, makes ripgrep exit with a usage error; `sch` then falls back to the pure-Python scanner. That fallback is correct but slow on this history (about 69 seconds for 15 GB), so it is a safety net and not a fast path.
 
 Claude Code lines keep the byte check in Python. Their key order varies, so no single anchored prefix covers them, and they are 12% of the history.
+
+## Comparison with grep and ripgrep
+
+The 13 seconds quoted for a common word over 15 GB is the multi-agent search before the speedups in 0.2.0. The released 0.1.3 only searched Claude Code, so it has no equivalent figure.
+
+To compare with the tools people would otherwise use, one word was searched in 13 GB of Codex history with `grep -rli`, `rg -li`, and the tool restricted to Codex with `--agent codex` (the tool returns the same 17 matching messages every time, and grep and rg return only file names). Each block ran A, B, B, A so that drift in machine load affects both tools equally, with 5 blocks for grep against the tool and 5 for rg against the tool. The load average was 12 at the start and 52 at the end.
+
+| Comparison | Median of block means | Ratio |
+| --- | --- | --- |
+| grep -rli against the tool | grep 16.7 s, tool 4.8 s | tool 3.6 times faster (2.3 to 4.6 across blocks) |
+| rg -li against the tool | rg 4.0 s, tool 5.3 s | rg 1.3 times faster in all 5 blocks (0.68 to 0.83) |
+
+grep is single-threaded. A first measurement at load average 104 with the tool reading all agents gave 41.8 s for grep and 10.0 s for the tool, a ratio of 4.2.
