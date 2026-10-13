@@ -206,6 +206,50 @@ class CliTests(unittest.TestCase):
         self.assertIn("filler before 0", found.stdout)
         self.assertIn("reply 0", found.stdout)
 
+    def test_context_counts_visible_messages_and_marks_the_match(self):
+        tool = {**record("assistant", "", "2026-01-02T00:00:01Z"),
+                "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            project = config_dir / "projects" / "-code-demo"
+            project.mkdir(parents=True)
+            lines = [
+                record("user", "earlier question", "2026-01-02T00:00:00Z"),
+                *[tool] * 3,
+                record("user", "where is the needle", "2026-01-02T00:00:02Z"),
+                *[tool] * 3,
+                {**record("assistant", "", "2026-01-02T00:00:03Z"),
+                 "message": {"role": "assistant", "content": [{"type": "text", "text": "the answer"}]}},
+            ]
+            (project / "0123abcd-0000-0000-0000-000000000000.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in lines) + "\n"
+            )
+            found = self.run_cli("search-clanker-history", "needle", "-B", "1", "-A", "1", config_dir=config_dir, home=temporary)
+            plain = self.run_cli("search-clanker-history", "needle", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(
+            [line for line in found.stdout.splitlines() if line[2:3] == "["],
+            ["  [user] earlier question", "> [user] where is the needle", "  [assistant] the answer"],
+        )
+        self.assertIn("  [user] where is the needle", plain.stdout)
+
+    def test_regex_match_is_shown_and_case_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            project = config_dir / "projects" / "-code-demo"
+            project.mkdir(parents=True)
+            text = "x" * 5000 + " the Deadline is Friday " + "y" * 5000
+            (project / "0123abcd-0000-0000-0000-000000000000.jsonl").write_text(
+                json.dumps(record("user", text, "2026-01-02T00:00:00Z")) + "\n"
+            )
+            found = self.run_cli("search-clanker-history", "-i", "deadline|due by", "-C", "20", config_dir=config_dir, home=temporary)
+            whole = self.run_cli("search-clanker-history", "deadline|due by", "-C", "0", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("the Deadline is Friday", found.stdout)
+        self.assertLess(len(found.stdout), 500)
+        self.assertIn(text, whole.stdout)
+
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)

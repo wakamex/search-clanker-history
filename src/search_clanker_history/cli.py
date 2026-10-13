@@ -217,28 +217,23 @@ def classify_line(obj):
     return None
 
 
-def highlight_pattern(text, pattern, ignore_case=True):
-    """Highlight pattern matches in text with bold red."""
+def _compile_ci(pattern):
     try:
-        flags = re.IGNORECASE if ignore_case else 0
-        return re.sub(
-            f"({re.escape(pattern)})",
-            f"{BOLD_RED()}\\1{RESET()}",
-            text,
-            flags=flags,
-        )
+        return re.compile(pattern, re.IGNORECASE)
     except re.error:
-        return text
+        return re.compile(re.escape(pattern), re.IGNORECASE)
 
 
-def truncate_around_match(text, pattern, context_chars):
-    """Truncate text to show context_chars around the first match."""
+def highlight_pattern(text, regex):
+    """Highlight the regex's matches in text with bold red."""
+    return regex.sub(lambda m: f"{BOLD_RED()}{m.group(0)}{RESET()}" if m.group(0) else "", text)
+
+
+def truncate_around_match(text, regex, context_chars):
+    """Truncate text to show context_chars around the regex's first match."""
     if context_chars <= 0:
         return text
-    try:
-        m = re.search(re.escape(pattern), text, re.IGNORECASE)
-    except re.error:
-        m = None
+    m = regex.search(text)
     if not m:
         return text[:context_chars * 2] + ("..." if len(text) > context_chars * 2 else "")
     start = max(0, m.start() - context_chars)
@@ -566,8 +561,8 @@ _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 class Hit:
     """One matching message, normalized across agents.
 
-    context(before, after) returns (before_entries, after_entries), each a list of
-    (type, role, text) tuples.
+    context(before, after, tools) returns (before_entries, after_entries), each a list of
+    (type, role, text) tuples. Tool entries count toward before and after only when tools is set.
     """
 
     def __init__(self, source, project, session, dt, kind, role, text, context):
@@ -585,46 +580,58 @@ class Hit:
         return self.dt.strftime("%Y-%m-%d %H:%M") if self.dt else ""
 
 
-def _read_lines_after(f, offset, n):
-    """The n lines following the line that starts at `offset`."""
+# Lines read on each side of a match while looking for context messages, so a long run of
+# tool traffic cannot turn one -A or -B into a read of the whole session.
+_CONTEXT_SCAN_LINES = 1000
+
+
+def _lines_after(f, offset):
+    """The lines following the line that starts at `offset`, in file order."""
     f.seek(offset)
     f.readline()
-    return [line for line in (f.readline() for _ in range(n)) if line]
+    return iter(f.readline, b"")
 
 
-def _read_lines_before(f, offset, n):
-    """The n lines preceding `offset`, read backward from it in chunks."""
-    if n <= 0:
-        return []
-    pos, buf = offset, b""
-    while pos > 0 and buf.count(b"\n") <= n:
+def _lines_before(f, offset):
+    """The lines preceding `offset`, nearest first, read backward in chunks."""
+    pos, head = offset, b""
+    while pos > 0:
         step = min(1 << 16, pos)
         pos -= step
         f.seek(pos)
-        buf = f.read(step) + buf
-    lines = buf.split(b"\n")[:-1]  # offset is a line start, so buf ends with a newline
-    if pos > 0:
-        lines = lines[1:]  # the first piece is the tail of a line that starts earlier
-    return lines[-n:]
+        lines = (f.read(step) + head).split(b"\n")
+        head = lines[0]  # may be the tail of a line that starts earlier
+        yield from reversed(lines[1:])
+    yield head
 
 
-def _jsonl_context(filepath, offset, before, after, classify):
-    entries = []
+def _context_entries(lines, n, classify, keep, tools):
+    """The first n entries among `lines` that the search would show."""
+    found = []
+    if n <= 0:
+        return found
+    for raw in itertools.islice(lines, _CONTEXT_SCAN_LINES):
+        if not keep(raw, tools):
+            continue
+        try:
+            entry = classify(json.loads(raw))
+        except json.JSONDecodeError:
+            continue
+        if entry and (tools or entry[0] != "tool"):
+            found.append(entry)
+            if len(found) == n:
+                break
+    return found
+
+
+def _jsonl_context(filepath, offset, before, after, classify, keep, tools):
     try:
         with open(filepath, "rb") as f:
-            for raws in (_read_lines_before(f, offset, before), _read_lines_after(f, offset, after)):
-                found = []
-                for raw in raws:
-                    try:
-                        entry = classify(json.loads(raw))
-                    except json.JSONDecodeError:
-                        continue
-                    if entry:
-                        found.append(entry)
-                entries.append(found)
+            earlier = _context_entries(_lines_before(f, offset), before, classify, keep, tools)
+            later = _context_entries(_lines_after(f, offset), after, classify, keep, tools)
     except OSError:
         return [], []
-    return entries[0], entries[1]
+    return earlier[::-1], later
 
 
 # Cheap byte-level checks that drop lines classify would discard as tool traffic, so the
@@ -697,7 +704,7 @@ def _jsonl_hits(
             kind, role, text = info
             yield Hit(
                 source, project, session, _parse_iso_ts(obj.get("timestamp", "")), kind, role, text,
-                lambda b, a, f=path, o=offset: _jsonl_context(f, o, b, a, classify),
+                lambda b, a, t, f=path, o=offset: _jsonl_context(f, o, b, a, classify, keep, t),
             )
 
 
@@ -728,13 +735,6 @@ def _open_db(path):
     return conn
 
 
-def _compile_ci(pattern):
-    try:
-        return re.compile(pattern, re.IGNORECASE)
-    except re.error:
-        return re.compile(re.escape(pattern), re.IGNORECASE)
-
-
 def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_session, newest_first):
     """Shared driver: find candidate sessions, normalize each, yield matching entries.
 
@@ -760,11 +760,10 @@ def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_sessi
                 if not regex.search(text):
                     continue
 
-                def context(b, a, entries=entries, i=i):
-                    return (
-                        [e[1:] for e in entries[max(0, i - b):i]],
-                        [e[1:] for e in entries[i + 1:i + 1 + a]],
-                    )
+                def context(b, a, tools, entries=entries, i=i):
+                    earlier = [e[1:] for e in entries[:i] if tools or e[1] != "tool"]
+                    later = [e[1:] for e in entries[i + 1:] if tools or e[1] != "tool"]
+                    return earlier[-b:] if b > 0 else [], later[:max(a, 0)]
 
                 hits.append(Hit(source, project, sid, dt, kind, role, text, context))
     hits.sort(key=lambda h: h.dt or _EPOCH, reverse=newest_first)
@@ -1019,7 +1018,11 @@ def main():
         allow_abbrev=False,  # --default-agents saves a setting, so it is reachable only by its full name
     )
     parser.add_argument("-V", "--version", action=_VersionAction)
-    parser.add_argument("pattern", nargs="?", help="Search pattern (supports regex)")
+    parser.add_argument("pattern", nargs="?", help="Search pattern (regex, case-insensitive)")
+    parser.add_argument(
+        "-i", "--ignore-case", action="store_true",
+        help="Accepted for grep users; matching is always case-insensitive",
+    )
     parser.add_argument(
         "--agent", action="append", choices=sorted(SOURCES), metavar="AGENT",
         help=f"Agent history to search: {', '.join(sorted(SOURCES))} "
@@ -1044,7 +1047,7 @@ def main():
     )
     parser.add_argument(
         "-C", "--context", type=int, default=200, metavar="CHARS",
-        help="Chars of text context around match (default 200)",
+        help="Chars of text shown on each side of the match (default 200); 0 shows whole messages",
     )
     parser.add_argument(
         "-n", "--limit", type=int, metavar="N",
@@ -1121,13 +1124,14 @@ def main():
         hits = itertools.chain.from_iterable(stream(name, False) for name in names)
 
     printed_count = 0
+    regex = _compile_ci(args.pattern)
+    # Without color the matching message looks like its context messages, so mark it.
+    marker = ">" if args.A > 0 or args.B > 0 else " "
 
     for hit in hits:
         before_lines, after_lines = [], []
         if args.B > 0 or args.A > 0:
-            before_lines, after_lines = hit.context(args.B, args.A)
-            before_lines = [e for e in before_lines if e[0] != "tool" or args.tools]
-            after_lines = [e for e in after_lines if e[0] != "tool" or args.tools]
+            before_lines, after_lines = hit.context(args.B, args.A, args.tools)
 
         short_session = hit.session[:8] if hit.session else "?"
         header = (
@@ -1139,14 +1143,14 @@ def main():
         print(header)
 
         for _, r, t in before_lines:
-            t_short = truncate_around_match(t, args.pattern, args.context).replace("\n", " ")
+            t_short = truncate_around_match(t, regex, args.context).replace("\n", " ")
             print(f"  {DIM()}{format_role(r)} {t_short}{RESET()}")
 
-        text_short = truncate_around_match(hit.text, args.pattern, args.context).replace("\n", " ")
-        print(f"  {format_role(hit.role)} {highlight_pattern(text_short, args.pattern)}")
+        text_short = truncate_around_match(hit.text, regex, args.context).replace("\n", " ")
+        print(f"{marker} {format_role(hit.role)} {highlight_pattern(text_short, regex)}")
 
         for _, r, t in after_lines:
-            t_short = truncate_around_match(t, args.pattern, args.context).replace("\n", " ")
+            t_short = truncate_around_match(t, regex, args.context).replace("\n", " ")
             print(f"  {DIM()}{format_role(r)} {t_short}{RESET()}")
 
         printed_count += 1

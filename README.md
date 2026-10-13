@@ -73,9 +73,10 @@ sch <pattern> [options]
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
 | `-t`, `--type` | Filter by role: `user` or `assistant` |
-| `-A N` | Show N messages after each match |
+| `-A N` | Show N messages after each match. Tool messages count only with `--tools`, and with `-A` or `-B` the matching message is marked `>` |
 | `-B N` | Show N messages before each match |
-| `-C`, `--context` | Chars of text context around match (default 200) |
+| `-C`, `--context` | Chars of text shown on each side of the match (default 200); `0` shows whole messages |
+| `-i`, `--ignore-case` | Accepted for grep users; matching is always case-insensitive |
 | `--since TIME` | Only messages at/after TIME (ISO 8601 or relative: `30m`, `2h`, `1d`, `1w`) |
 | `--until TIME` | Only messages at/before TIME (same formats as `--since`) |
 | `-n`, `--limit N` | Only the N most recent matches (printed oldest first). Scans newest files first and stops as soon as N are found |

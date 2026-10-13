@@ -59,7 +59,7 @@ sch [OPTIONS] PATTERN
 - `-t {user,assistant}` — Filter by message role
 - `-A N` — Show N messages after match
 - `-B N` — Show N messages before match
-- `-C CHARS` — Show CHARS of text context around match (default 200)
+- `-C CHARS` — Show CHARS of text on each side of the match (default 200); `-C 0` shows whole messages
 - `-n N` — Only the N most recent matches (fast; stops reading older history early)
 - `--since TIME` — Only messages at/after TIME (ISO 8601 like `2026-04-01`, or relative: `30m`, `2h`, `1d`, `1w`)
 - `--until TIME` — Only messages at/before TIME (same formats as `--since`)
@@ -137,13 +137,13 @@ Prefer this over piping through `grep "<date>"`: the match timestamp drives the 
 - **Escape special regex characters**: Use `\.` for literal dots (e.g., `Qwen3\.5`)
 - **Use alternation for variations**: `error|fail|crash` catches all
 - **Combine terms flexibly**: `benchmark.*score|score.*benchmark` handles word order
-- **Case sensitivity**: Default is case-sensitive; use `-i` flag if available
+- **Case sensitivity**: Matching is always case-insensitive; `-i` is accepted and changes nothing
 
 ### Context Window Tuning
 
 - **Start with `-A 3 -B 2`** for most searches
 - **Use `-A 10`** when looking for complete output (like benchmark results)
-- **Use `-C 500`** for long error messages or config dumps
+- **Use `-C 500`** for long error messages or config dumps, and `-C 0` to read whole messages
 - **Add `--tools`** to see actual tool executions (file edits, bash commands)
 
 ### Filtering for Precision
