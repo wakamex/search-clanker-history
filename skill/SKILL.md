@@ -60,6 +60,7 @@ sch [OPTIONS] PATTERN
 - `-A N` — Show N messages after match
 - `-B N` — Show N messages before match
 - `-C CHARS` — Show CHARS of text on each side of the match (default 200); `-C 0` shows whole messages
+- `--file PATH` — Search a chat log instead of agent history: `.jsonl` with `sent`, `sender`, `text`, or `YYYY-MM-DD HH:MM SENDER: TEXT` lines. Messages read as `SENDER: TEXT`, so `^NAME:` picks a sender
 - `-n N` — Only the N most recent matches (fast; stops reading older history early)
 - `--since TIME` — Only messages at/after TIME (ISO 8601 like `2026-04-01`, or relative: `30m`, `2h`, `1d`, `1w`)
 - `--until TIME` — Only messages at/before TIME (same formats as `--since`)

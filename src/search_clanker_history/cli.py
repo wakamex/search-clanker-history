@@ -722,6 +722,69 @@ def codex_hits(pattern, project_filter, since, newest_first=False, tools=False):
     )
 
 
+# --- Chat log files ----------------------------------------------------------
+
+# A text chat log line: `YYYY-MM-DD HH:MM SENDER: TEXT`, with line breaks inside a message written as ⏎.
+_CHAT_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) ([^:\n]+): ?(.*)$")
+
+
+def _chat_time(value):
+    """Aware datetime in the file's own offset; times without one are local time."""
+    try:
+        dt = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.astimezone()
+
+
+def _chat_messages(path):
+    """[(line, dt, sender, text)] for a chat log.
+
+    `.jsonl` files hold one object per line with `sent`, `sender` and `text`. Other files hold
+    one message per line as `YYYY-MM-DD HH:MM SENDER: TEXT`; a line without that prefix
+    continues the message before it.
+    """
+    messages = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip("\r\n")
+            if path.suffix == ".jsonl":
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and isinstance(obj.get("text"), str):
+                    messages.append((n, _chat_time(obj.get("sent")), str(obj.get("sender") or "?"), obj["text"]))
+                continue
+            m = _CHAT_LINE_RE.match(line)
+            if m:
+                messages.append((n, _chat_time(m.group(1)), m.group(2), m.group(3).replace("\u23ce", "\n")))
+            elif messages and line:
+                n0, dt, sender, text = messages[-1]
+                messages[-1] = (n0, dt, sender, f"{text}\n{line}")
+    return messages
+
+
+def file_hits(path, pattern, project_filter, newest_first=False):
+    """Hits from one chat log. The sender is part of the searched text, as `SENDER: TEXT`."""
+    if project_filter and project_filter.lower() not in path.name.lower():
+        return
+    regex = _compile_ci(pattern)
+    entries = [(n, dt, f"{sender}: {text}") for n, dt, sender, text in _chat_messages(path)]
+    hits = []
+    for i, (n, dt, text) in enumerate(entries):
+        if regex.search(text):
+
+            def context(b, a, tools, i=i):
+                earlier = [("chat", None, e[2]) for e in entries[max(0, i - b):i]] if b > 0 else []
+                return earlier, [("chat", None, e[2]) for e in entries[i + 1:i + 1 + max(a, 0)]]
+
+            hits.append(Hit("file", path.name, str(n), dt, "chat", None, text, context))
+    if newest_first:
+        hits.reverse()
+    yield from hits
+
+
 # --- SQLite-backed agents (OpenCode, Hermes) ----------------------------------
 
 
@@ -1004,6 +1067,13 @@ class _VersionAction(argparse.Action):
 
 
 def format_role(role):
+    """The role tag and its trailing space; chat log messages carry their sender in the text."""
+    if role is None:
+        return ""
+    return f"{_role_tag(role)} "
+
+
+def _role_tag(role):
     if role == "user":
         return f"{GREEN()}[user]{RESET()}"
     elif role == "assistant":
@@ -1022,6 +1092,12 @@ def main():
     parser.add_argument(
         "-i", "--ignore-case", action="store_true",
         help="Accepted for grep users; matching is always case-insensitive",
+    )
+    parser.add_argument(
+        "--file", action="append", type=Path, metavar="PATH",
+        help="Search a chat log instead of agent history (repeatable): a .jsonl file of objects with "
+        "sent, sender and text, or a text file of 'YYYY-MM-DD HH:MM SENDER: TEXT' lines. "
+        "Each message is searched as 'SENDER: TEXT', so ^NAME: matches one sender",
     )
     parser.add_argument(
         "--agent", action="append", choices=sorted(SOURCES), metavar="AGENT",
@@ -1078,8 +1154,24 @@ def main():
 
     _init_color(force_no_color=args.no_color)
 
-    scoped, source = (None, None) if args.agent else _default_agents()
-    if args.agent:
+    if args.file:
+        if args.agent:
+            parser.error("--file searches only the named files and cannot be combined with --agent")
+        if args.type or args.tools:
+            parser.error("-t and --tools apply to agent history; match a sender in a chat log with ^NAME:")
+        unreadable = [str(f) for f in args.file if not f.is_file()]
+        if unreadable:
+            print(f"Error: no such file: {', '.join(unreadable)}", file=sys.stderr)
+            sys.exit(1)
+    sources = {
+        str(f): lambda newest_first, f=f: file_hits(f, args.pattern, args.project, newest_first)
+        for f in dict.fromkeys(args.file or [])
+    }
+
+    scoped, source = (None, None) if args.agent or args.file else _default_agents()
+    if args.file:
+        names, missing = list(sources), []
+    elif args.agent:
         names = list(dict.fromkeys(args.agent))
         missing = [n for n in names if not SOURCES[n][1]()]
     else:
@@ -1109,9 +1201,12 @@ def main():
         return True
 
     def stream(name, newest_first):
-        hits = SOURCES[name][0](
-            args.pattern, args.project, args.since, newest_first=newest_first, tools=args.tools
-        )
+        if name in sources:
+            hits = sources[name](newest_first)
+        else:
+            hits = SOURCES[name][0](
+                args.pattern, args.project, args.since, newest_first=newest_first, tools=args.tools
+            )
         return (h for h in hits if accepted(h))
 
     if args.limit:
@@ -1134,24 +1229,27 @@ def main():
             before_lines, after_lines = hit.context(args.B, args.A, args.tools)
 
         short_session = hit.session[:8] if hit.session else "?"
-        header = (
-            f"{DIM()}── {hit.timestamp} | {hit.source} | {hit.project} "
-            f"| session:{short_session} ──{RESET()}"
-        )
+        if hit.source == "file":
+            header = f"{DIM()}── {hit.timestamp} | {hit.project}:{hit.session} ──{RESET()}"
+        else:
+            header = (
+                f"{DIM()}── {hit.timestamp} | {hit.source} | {hit.project} "
+                f"| session:{short_session} ──{RESET()}"
+            )
         if printed_count > 0:
             print()
         print(header)
 
         for _, r, t in before_lines:
             t_short = truncate_around_match(t, regex, args.context).replace("\n", " ")
-            print(f"  {DIM()}{format_role(r)} {t_short}{RESET()}")
+            print(f"  {DIM()}{format_role(r)}{t_short}{RESET()}")
 
         text_short = truncate_around_match(hit.text, regex, args.context).replace("\n", " ")
-        print(f"{marker} {format_role(hit.role)} {highlight_pattern(text_short, regex)}")
+        print(f"{marker} {format_role(hit.role)}{highlight_pattern(text_short, regex)}")
 
         for _, r, t in after_lines:
             t_short = truncate_around_match(t, regex, args.context).replace("\n", " ")
-            print(f"  {DIM()}{format_role(r)} {t_short}{RESET()}")
+            print(f"  {DIM()}{format_role(r)}{t_short}{RESET()}")
 
         printed_count += 1
 

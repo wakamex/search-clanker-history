@@ -250,6 +250,47 @@ class CliTests(unittest.TestCase):
         self.assertLess(len(found.stdout), 500)
         self.assertIn(text, whole.stdout)
 
+    def test_chat_logs_are_searched_in_text_and_jsonl_form(self):
+        messages = [
+            ("2026-03-01T09:00:00-05:00", "Ann Lee", "lunch at noon?"),
+            ("2026-03-01T09:05:00-05:00", "Bot", "noon works.\nSee you there"),
+            ("2026-03-02T10:00:00-05:00", "Ann Lee", "the deadline moved to Friday"),
+            ("2026-03-03T11:00:00-05:00", "Bot", "Ann Lee: noted, Friday it is"),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            text_log = Path(temporary) / "chat.txt"
+            text_log.write_text("".join(
+                f"{sent[:10]} {sent[11:16]} {sender}: {text.replace(chr(10), chr(0x23CE))}\n"
+                for sent, sender, text in messages
+            ))
+            json_log = Path(temporary) / "chat.jsonl"
+            json_log.write_text("".join(
+                json.dumps({"sent": sent, "sender": sender, "text": text, "attachments": []}) + "\n"
+                for sent, sender, text in messages
+            ))
+            for log in (text_log, json_log):
+                with self.subTest(log=log.name):
+                    sender = self.run_cli("search-clanker-history", "^Ann Lee:", "--file", str(log), home=temporary)
+                    self.assertEqual(sender.returncode, 0, sender.stderr)
+                    self.assertIn("2 match(es)", sender.stdout)
+                    self.assertIn(f"── 2026-03-01 09:00 | {log.name}:1 ──", sender.stdout)
+                    self.assertNotIn("noted", sender.stdout)
+
+                    context = self.run_cli("search-clanker-history", "deadline", "--file", str(log), "-B", "1", "-A", "1", home=temporary)
+                    self.assertIn("  Bot: noon works. See you there", context.stdout)
+                    self.assertIn("> Ann Lee: the deadline moved to Friday", context.stdout)
+                    self.assertIn("  Bot: Ann Lee: noted, Friday it is", context.stdout)
+
+                    recent = self.run_cli("search-clanker-history", "noon|friday", "--file", str(log), "-n", "1", "--since", "2026-03-02", home=temporary)
+                    self.assertIn("1 match(es)", recent.stdout)
+                    self.assertIn("noted", recent.stdout)
+
+            agent = self.run_cli("search-clanker-history", "noon", "--file", str(text_log), "--agent", "claude", home=temporary)
+            missing = self.run_cli("search-clanker-history", "noon", "--file", str(Path(temporary) / "nope.txt"), home=temporary)
+        self.assertEqual(agent.returncode, 2)
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("no such file", missing.stderr)
+
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)

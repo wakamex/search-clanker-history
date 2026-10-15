@@ -70,6 +70,7 @@ sch <pattern> [options]
 | Flag | Description |
 |------|-------------|
 | `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, or `hermes`. Repeat the flag to search several. Overrides the default agents for this search |
+| `--file PATH` | Search a chat log instead of agent history (repeatable). See Chat logs below |
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
 | `-t`, `--type` | Filter by role: `user` or `assistant` |
@@ -109,6 +110,19 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
 
 Databases are opened read-only.
+
+## Chat logs
+
+`--file PATH` searches a chat log, such as an exported group chat, instead of agent history. Two formats are read:
+
+- A `.jsonl` file with one JSON object per line, holding `sent` (ISO 8601 time), `sender`, and `text`. Other keys are ignored.
+- Any other file, with one message per line as `YYYY-MM-DD HH:MM SENDER: TEXT`. Line breaks inside a message may be written as `⏎`, and a line without the date prefix continues the message before it.
+
+Each message is searched and printed as `SENDER: TEXT`, so `^NAME:` matches the messages of one sender. `-C`, `-A`, `-B`, `-n`, `--since`, and `--until` work as for agent history, and the header names the file and the message's line, for example `── 2026-03-01 09:00 | chat.txt:1 ──`. Times are shown in the file's own clock; times without an offset are read as local time.
+
+```sh
+sch "^Ann Lee:.*deadline" --file chat.txt -B 1 -A 1
+```
 
 ## Performance
 
