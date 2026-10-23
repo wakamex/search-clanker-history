@@ -1066,7 +1066,8 @@ def _agy_entries(step_type, payload, extra):
     seconds = _pb_get(stamp, 1) if stamp else None
     dt = _from_epoch(seconds) if isinstance(seconds, int) else None
     if step_type == _AGY_USER:
-        text = _pb_text(_pb_get(payload, 19, 2) or b"")
+        # Some prompts keep their text only in the structured copy at 19.3.1.
+        text = _pb_text(_pb_get(payload, 19, 2) or b"") or _pb_text(_pb_get(payload, 19, 3, 1) or b"")
         return [(dt, "user", "user", text)] if text else []
     if step_type == _AGY_REPLY:
         reply = _pb_get(payload, 20) or b""

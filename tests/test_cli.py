@@ -182,6 +182,7 @@ class CliTests(unittest.TestCase):
                 )))),
                 (132, agy_step(132, 1767323047, (140, pb((2, pb((1, "utils.py: def glorpify"))))))),
                 (15, agy_step(15, 1767323048, (20, pb((1, "glorpify is in utils"))))),
+                (14, agy_step(14, 1767323049, (19, pb((3, pb((1, "thanks, glorpify found"))))))),
             ]
             for idx, (step_type, payload) in enumerate(steps):
                 conn.execute("INSERT INTO steps VALUES (?, ?, ?)", (idx, step_type, payload))
@@ -197,7 +198,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("> [user] where is the glorpify helper", plain.stdout)
         self.assertIn("  [user] where is the glorpify helper", plain.stdout)
         self.assertIn("> [assistant] glorpify is in utils", plain.stdout)
-        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("> [user] thanks, glorpify found", plain.stdout)
+        self.assertIn("3 match(es)", plain.stdout)
         self.assertIn("[thinking] glorpify might be in utils, check first", thinking.stdout)
         self.assertIn("utils.py: def glorpify", tools.stdout)
 
