@@ -309,7 +309,8 @@ class CliTests(unittest.TestCase):
             ]
             path = project / f"0123abcd-0000-0000-0000-00000000000{n}.jsonl"
             path.write_text("\n".join(json.dumps(item) for item in lines) + "\n")
-            os.utime(path, (1_767_225_600 + n * 86_400, 1_767_225_600 + n * 86_400))
+            modified = 1_767_225_600 + n * 86_400 + 3  # just after the last message, as a real session file is
+            os.utime(path, (modified, modified))
 
     def test_limit_keeps_the_most_recent_matches_in_chronological_order(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -429,6 +430,40 @@ class CliTests(unittest.TestCase):
         self.assertIn("needle in session 1", one.stdout)
         self.assertIn("3 match(es)", prefix.stdout)
         self.assertIn("── 2026-01-01 19:00 | claude |", toronto.stdout)
+
+    def test_after_starts_at_the_latest_matching_message(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 3)
+            found = self.run_cli("search-clanker-history", "--after", "needle in session [01]", config_dir=config_dir, home=temporary)
+            replies = self.run_cli("search-clanker-history", "reply", "--after", "needle in session 0", config_dir=config_dir, home=temporary)
+            missing = self.run_cli("search-clanker-history", "--after", "no such words", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertNotIn("session 0", found.stdout)
+        self.assertIn("needle in session 1", found.stdout)
+        self.assertIn("reply 1", found.stdout)
+        self.assertIn("needle in session 2", found.stdout)
+        self.assertIn("reply 0", replies.stdout)
+        self.assertIn("3 match(es)", replies.stdout)
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("no message matches --after", missing.stderr)
+
+    def test_json_prints_one_object_per_match_with_whole_texts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 1)
+            found = self.run_cli("search-clanker-history", "filler", "--json", "-A", "1", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        lines = found.stdout.splitlines()
+        self.assertEqual(len(lines), 1)
+        hit = json.loads(lines[0])
+        self.assertEqual(hit["time"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual((hit["agent"], hit["project"], hit["kind"], hit["role"]), ("claude", "-code-demo", "user", "user"))
+        self.assertEqual(hit["session"], "0123abcd-0000-0000-0000-000000000000")
+        self.assertEqual(len(hit["text"]), len("filler before 0 ") + 200_000)
+        self.assertEqual(hit["after"], [{"kind": "user", "role": "user", "text": "needle in session 0"}])
 
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:

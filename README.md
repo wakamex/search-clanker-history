@@ -81,6 +81,8 @@ sch <pattern> [options]
 | `-C`, `--context` | Chars of text shown on each side of the match (default 200); `0` shows whole messages |
 | `-i`, `--ignore-case` | Accepted for grep users; matching is always case-insensitive |
 | `--since TIME` | Only messages at/after TIME (ISO 8601 or relative: `30m`, `2h`, `1d`, `1w`). A time without an offset is local time, the same clock result headers show |
+| `--after PATTERN` | Start at the most recent message matching PATTERN and show the messages from it on. PATTERN for the search itself may then be left out to show every message. `-p`, `-s`, `--since`, and `--until` narrow which message it starts at; `-t` applies only to the messages shown |
+| `--json` | One JSON object per line for each match: `time`, `agent`, `project`, `session` (full id), `kind`, `role`, the whole `text`, and the `before` and `after` context messages |
 | `--until TIME` | Only messages at/before TIME (same formats as `--since`) |
 | `-n`, `--limit N` | Only the N most recent matches (printed oldest first). Scans newest files first and stops as soon as N are found |
 | `--tools` | Include tool_use/tool_result messages (hidden by default) |
@@ -96,6 +98,7 @@ sch "deployment" -p myproject             # filter to a project
 sch "refactor" -B 1 -A 1                 # show surrounding messages
 sch "SELECT.*FROM" --tools               # search tool calls too
 sch "retry" --thinking                   # search the agents' reasoning too
+sch --after "ship it" -p myproject -C 0   # every message since the last "ship it"
 sch "deploy" --agent codex                # only Codex sessions
 sch "deploy" -n 5 -B 1                    # the 5 most recent matches, fast
 sch "deploy" --since 1w                   # only the last week

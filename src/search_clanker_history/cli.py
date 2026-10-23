@@ -1307,12 +1307,21 @@ def _role_tag(role):
 
 
 def main():
+    try:
+        _main()
+    except BrokenPipeError:
+        # The reader, such as `head`, closed the pipe; stop quietly as other command-line tools do.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)
+
+
+def _main():
     parser = argparse.ArgumentParser(
         description=f"Search {', '.join(v[2] for v in SOURCES.values())} session history",
         allow_abbrev=False,  # --default-agents saves a setting, so it is reachable only by its full name
     )
     parser.add_argument("-V", "--version", action=_VersionAction)
-    parser.add_argument("pattern", nargs="?", help="Search pattern (regex, case-insensitive)")
+    parser.add_argument("pattern", nargs="?", help="Search pattern (regex, case-insensitive); with --after it defaults to every message")
     parser.add_argument(
         "-i", "--ignore-case", action="store_true",
         help="Accepted for grep users; matching is always case-insensitive",
@@ -1371,6 +1380,15 @@ def main():
         help="Only messages at/after TIME (ISO 8601 or relative: 30m, 2h, 1d, 1w)",
     )
     parser.add_argument(
+        "--after", metavar="PATTERN",
+        help="Start at the most recent message matching PATTERN (regex, case-insensitive) "
+        "and show the messages from it on; narrow which message with -p, -s, --since and --until",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Print one JSON object per match, with whole message texts, instead of the text layout",
+    )
+    parser.add_argument(
         "--until", type=_parse_time_arg, metavar="TIME",
         help="Only messages at/before TIME (ISO 8601 or relative)",
     )
@@ -1382,7 +1400,9 @@ def main():
         _set_default_agents(args.default_agents)
         return
     if not args.pattern:
-        parser.error("the following arguments are required: pattern")
+        if not args.after:
+            parser.error("the following arguments are required: pattern")
+        args.pattern = "."
 
     _init_color(force_no_color=args.no_color)
 
@@ -1396,7 +1416,7 @@ def main():
             print(f"Error: no such file: {', '.join(unreadable)}", file=sys.stderr)
             sys.exit(1)
     sources = {
-        str(f): lambda newest_first, f=f: file_hits(f, args.pattern, args.project, newest_first)
+        str(f): lambda pattern, newest_first, f=f: file_hits(f, pattern, args.project, newest_first)
         for f in dict.fromkeys(args.file or [])
     }
 
@@ -1420,11 +1440,7 @@ def main():
 
     extra = frozenset(kind for kind, on in (("tool", args.tools), ("thinking", args.thinking)) if on)
 
-    def accepted(hit):
-        if not _visible(hit.kind, extra):
-            return False
-        if args.type and hit.role != args.type:
-            return False
+    def in_window(hit):
         if args.since or args.until:
             if hit.dt is None:
                 return False  # no timestamp — can't confirm it falls in window
@@ -1434,15 +1450,30 @@ def main():
                 return False
         return True
 
-    def stream(name, newest_first):
+    def accepted(hit):
+        return _visible(hit.kind, extra) and (not args.type or hit.role == args.type) and in_window(hit)
+
+    def search(name, pattern, newest_first):
         if name in sources:
-            hits = sources[name](newest_first)
-        else:
-            hits = SOURCES[name][0](
-                args.pattern, args.project, args.since, newest_first=newest_first, extra=extra,
-                session=args.session,
-            )
-        return (h for h in hits if accepted(h))
+            return sources[name](pattern, newest_first)
+        return SOURCES[name][0](
+            pattern, args.project, args.since, newest_first=newest_first, extra=extra, session=args.session,
+        )
+
+    def stream(name, newest_first):
+        return (h for h in search(name, args.pattern, newest_first) if accepted(h))
+
+    if args.after:
+        # The starting message obeys every filter except -t, so a reply can follow a user message.
+        starts = [
+            next((h for h in search(name, args.after, True) if _visible(h.kind, extra) and in_window(h) and h.dt), None)
+            for name in names
+        ]
+        start = max((h for h in starts if h), key=lambda h: h.dt, default=None)
+        if start is None:
+            print(f"Error: no message matches --after {args.after!r}", file=sys.stderr)
+            sys.exit(1)
+        args.since = start.dt
 
     if args.limit:
         recent = []
@@ -1462,6 +1493,21 @@ def main():
         before_lines, after_lines = [], []
         if args.B > 0 or args.A > 0:
             before_lines, after_lines = hit.context(args.B, args.A, extra)
+
+        if args.json:
+            print(json.dumps({
+                "time": hit.dt.astimezone().isoformat() if hit.dt else None,
+                "agent": hit.source,
+                "project": hit.project,
+                "session": hit.session,
+                "kind": hit.kind,
+                "role": hit.role,
+                "text": hit.text,
+                "before": [{"kind": k, "role": r, "text": t} for k, r, t in before_lines],
+                "after": [{"kind": k, "role": r, "text": t} for k, r, t in after_lines],
+            }, ensure_ascii=False))
+            printed_count += 1
+            continue
 
         short_session = hit.session[:8] if hit.session else "?"
         if hit.source == "file":
@@ -1488,7 +1534,10 @@ def main():
 
         printed_count += 1
 
-    if printed_count == 0:
+    if args.json:
+        if printed_count == 0 and hint:
+            print(hint, file=sys.stderr)
+    elif printed_count == 0:
         print("No matches found.")
         if hint:
             print(hint, file=sys.stderr)
