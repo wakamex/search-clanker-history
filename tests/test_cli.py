@@ -20,29 +20,6 @@ def record(role, text, timestamp):
     }
 
 
-def pb(*fields):
-    """Encode (field, value) pairs as a protobuf message: int values as varints, the rest as bytes."""
-    def varint(n):
-        out = b""
-        while True:
-            out += bytes([(n & 0x7F) | (0x80 if n > 0x7F else 0)])
-            n >>= 7
-            if not n:
-                return out
-    data = b""
-    for field, value in fields:
-        if isinstance(value, int):
-            data += varint(field << 3) + varint(value)
-        else:
-            value = value.encode() if isinstance(value, str) else value
-            data += varint(field << 3 | 2) + varint(len(value)) + value
-    return data
-
-
-def agy_step(step_type, seconds, *content):
-    """An agy step payload: its type, the step metadata with its time in field 5, then its content."""
-    return pb((1, step_type), (4, 3), (5, pb((1, pb((1, seconds), (2, 0))))), *content)
-
 
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, config_dir=None, home=None, tz="UTC"):
@@ -164,44 +141,46 @@ class CliTests(unittest.TestCase):
         self.assertIn("zorbify lives in utils", found.stdout)
         self.assertNotIn("where is the zorbify helper", found.stdout)
 
-    def test_antigravity_conversations_are_searched(self):
+    def test_antigravity_transcripts_are_searched(self):
         with tempfile.TemporaryDirectory() as temporary:
-            conversations = Path(temporary) / ".gemini" / "antigravity-cli" / "conversations"
-            conversations.mkdir(parents=True)
-            conn = sqlite3.connect(conversations / "1946fe8f-0000-0000-0000-000000000000.db")
-            conn.executescript(
-                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB);"
-                "CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);"
-            )
-            conn.execute("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)", (pb((7, "file:///code/demo")),))
+            agy = Path(temporary) / ".gemini" / "antigravity-cli"
+            sid = "1946fe8f-0000-0000-0000-000000000000"
+            logs = agy / "brain" / sid / ".system_generated" / "logs"
+            logs.mkdir(parents=True)
             steps = [
-                (14, agy_step(14, 1767323045, (19, pb((2, "where is the glorpify helper"))))),
-                (15, agy_step(15, 1767323046, (20, pb(
-                    (3, "glorpify might be in utils, check first"),
-                    (7, pb((1, "call_1"), (2, "run_command"), (3, '{"CommandLine":"grep glorpify"}'))),
-                )))),
-                (132, agy_step(132, 1767323047, (140, pb((2, pb((1, "utils.py: def glorpify"))))))),
-                (15, agy_step(15, 1767323048, (20, pb((1, "glorpify is in utils"))))),
-                (14, agy_step(14, 1767323049, (19, pb((3, pb((1, "thanks, glorpify found"))))))),
+                {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+                 "created_at": "2026-01-02T03:04:05Z", "content": "<USER_REQUEST>\nwhere is the glorpify helper\n</USER_REQUEST>"},
+                {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                 "created_at": "2026-01-02T03:04:06Z", "thinking": "glorpify might be in utils, check first",
+                 "tool_calls": [{"name": "run_command", "args": {"CommandLine": "grep glorpify"}}]},
+                {"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                 "created_at": "2026-01-02T03:04:07Z", "content": "utils.py: def glorpify"},
+                {"step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                 "created_at": "2026-01-02T03:04:08Z", "content": "glorpify is in utils"},
             ]
-            for idx, (step_type, payload) in enumerate(steps):
-                conn.execute("INSERT INTO steps VALUES (?, ?, ?)", (idx, step_type, payload))
+            (logs / "transcript_full.jsonl").write_text("".join(json.dumps(step) + "\n" for step in steps))
+            (logs / "transcript.jsonl").write_text(json.dumps({**steps[0], "content": "glorpify duplicate"}) + "\n")
+            conn = sqlite3.connect(agy / "conversation_summaries.db")
+            conn.execute("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT NOT NULL)")
+            conn.execute("INSERT INTO conversation_summaries VALUES (?, ?)", (sid, json.dumps(["file:///code/demo"])))
             conn.commit()
             conn.close()
 
             plain = self.run_cli("search-clanker-history", "glorpify", "--agent", "antigravity", "-B", "1", home=temporary)
-            thinking = self.run_cli("search-clanker-history", "check first", "--thinking", home=temporary)
-            tools = self.run_cli("search-clanker-history", "def glorpify", "--tools", home=temporary)
+            thinking = self.run_cli("search-clanker-history", "check first", "--thinking", "-p", "demo", home=temporary)
+            tools = self.run_cli("search-clanker-history", "glorpify", "--tools", "--thinking", home=temporary)
 
         self.assertEqual(plain.returncode, 0, plain.stderr)
         self.assertIn("── 2026-01-02 03:04 | antigravity | -code-demo | session:1946fe8f ──", plain.stdout)
         self.assertIn("> [user] where is the glorpify helper", plain.stdout)
         self.assertIn("  [user] where is the glorpify helper", plain.stdout)
         self.assertIn("> [assistant] glorpify is in utils", plain.stdout)
-        self.assertIn("> [user] thanks, glorpify found", plain.stdout)
-        self.assertIn("3 match(es)", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertNotIn("duplicate", plain.stdout)
         self.assertIn("[thinking] glorpify might be in utils, check first", thinking.stdout)
-        self.assertIn("utils.py: def glorpify", tools.stdout)
+        self.assertIn('[run_command: {"CommandLine": "grep glorpify"}]', tools.stdout)
+        self.assertIn("[tool] utils.py: def glorpify", tools.stdout)
+        self.assertIn("5 match(es)", tools.stdout)
 
     def test_thinking_is_searched_only_with_the_flag(self):
         with tempfile.TemporaryDirectory() as temporary:

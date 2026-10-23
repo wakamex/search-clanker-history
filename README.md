@@ -113,7 +113,7 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 | Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` rollout files | `CODEX_HOME` | Session working directory, with `/` replaced by `-` |
 | OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | `XDG_DATA_HOME` | Session directory, with `/` replaced by `-` |
 | Hermes | `~/.hermes/state.db` (SQLite) | `HERMES_HOME` | Session working directory, or its source such as `cli` |
-| Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.db`, one SQLite database per conversation | none | Conversation workspace, with `/` replaced by `-` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`, one transcript per conversation | none | Workspace from `conversation_summaries.db`, with `/` replaced by `-` |
 
 Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given, and reasoning unless `--thinking` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
 
@@ -121,7 +121,7 @@ Databases are opened read-only.
 
 Reasoning is searchable only where the history keeps it as text. Claude Code thinking blocks are text unless the model returned them redacted. Codex stores reasoning encrypted and keeps a readable summary only for some models, so most Codex reasoning cannot be searched. OpenCode reasoning parts, the Hermes `reasoning` column, and Antigravity thoughts are text.
 
-Antigravity stores each step of a conversation as a [Protocol Buffers](https://protobuf.dev/) message with no published schema. The tool reads the user prompts, replies, thoughts, and tool calls from the fields that hold them in current `agy` releases, and treats every other step, such as tool output and notices, as a tool entry. A search that includes Antigravity tool output with `--tools` decodes every step of each matching conversation, which takes several seconds on a large history.
+Antigravity transcripts hold each step with its type. Tool output (`GENERIC` steps), system messages, and checkpoint summaries are tool entries, shown with `--tools`. A conversation with no workspace in agy's summaries database shows an empty project and is not matched by `-p`.
 
 ## Chat logs
 

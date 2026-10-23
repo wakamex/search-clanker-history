@@ -52,7 +52,7 @@ def _hermes_db():
 
 
 def _antigravity_dir():
-    return Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+    return Path.home() / ".gemini" / "antigravity-cli"
 
 
 # Message kinds hidden unless asked for: --tools shows "tool", --thinking shows "thinking".
@@ -318,8 +318,10 @@ def _parse_iso_ts(ts):
         return None
 
 
-def _list_files(roots, since=None):
+def _list_files(roots, since=None, name=None):
     """Return (mtime, path) for session JSONL files, oldest first, excluding subagents/.
+
+    `name` keeps only files with that name, for harnesses that write several JSONL files per session.
 
     If `since` (aware UTC datetime) is given, skip files whose mtime predates it:
     every line in such files was written before `since`, so none can match.
@@ -331,7 +333,7 @@ def _list_files(roots, since=None):
             # Prune subagents directories
             dirnames[:] = [d for d in dirnames if d != "subagents"]
             for fname in filenames:
-                if not fname.endswith(".jsonl"):
+                if not fname.endswith(".jsonl") or (name and fname != name):
                     continue
                 fpath = os.path.join(dirpath, fname)
                 try:
@@ -628,8 +630,8 @@ def _lines_before(f, offset):
     yield head
 
 
-def _context_entries(lines, n, classify, keep, extra):
-    """The first n entries among `lines` that the search would show."""
+def _context_entries(lines, n, classify, keep, extra, backward=False):
+    """The first n entries among `lines` that the search would show, nearest first."""
     found = []
     if n <= 0:
         return found
@@ -637,20 +639,22 @@ def _context_entries(lines, n, classify, keep, extra):
         if not keep(raw, extra):
             continue
         try:
-            entry = classify(json.loads(raw))
+            info = classify(json.loads(raw))
         except json.JSONDecodeError:
             continue
-        if entry and _visible(entry[0], extra):
-            found.append(entry)
-            if len(found) == n:
-                break
+        entries = info if isinstance(info, list) else [info] if info else []
+        for entry in reversed(entries) if backward else entries:
+            if _visible(entry[0], extra):
+                found.append(entry)
+                if len(found) == n:
+                    return found
     return found
 
 
 def _jsonl_context(filepath, offset, before, after, classify, keep, extra):
     try:
         with open(filepath, "rb") as f:
-            earlier = _context_entries(_lines_before(f, offset), before, classify, keep, extra)
+            earlier = _context_entries(_lines_before(f, offset), before, classify, keep, extra, backward=True)
             later = _context_entries(_lines_after(f, offset), after, classify, keep, extra)
     except OSError:
         return [], []
@@ -699,13 +703,14 @@ _BATCH_FILES_NEWEST_FIRST = 32
 
 def _jsonl_hits(
     source, roots, pattern, since, classify, session_info, project_filter, keep, newest_first, extra,
-    line_prefix=None, session=None,
+    line_prefix=None, session=None, file_name=None,
 ):
     """Yield hits oldest file first (lines ascending), or newest first with lines descending.
 
     Files are scanned in batches so a caller that stops early skips the older files.
     """
-    files = _list_files(roots, since)
+    files = _list_files(roots, since, file_name)
+    regex = _compile_ci(pattern)
     if project_filter:
         needle = project_filter.lower()
         files = [f for f in files if needle in session_info(f[1])[0].lower()]
@@ -730,12 +735,15 @@ def _jsonl_hits(
             info = classify(obj)
             if info is None:
                 continue
+            # A line may hold several messages, such as an agy reply with its thinking; keep those that match.
+            entries = [e for e in info if regex.search(e[2])] if isinstance(info, list) else [info]
             project, session = session_info(path)
-            kind, role, text = info
-            yield Hit(
-                source, project, session, _parse_iso_ts(obj.get("timestamp", "")), kind, role, text,
-                lambda b, a, x, f=path, o=offset: _jsonl_context(f, o, b, a, classify, keep, x),
-            )
+            dt = _parse_iso_ts(obj.get("timestamp") or obj.get("created_at") or "")
+            for kind, role, text in entries:
+                yield Hit(
+                    source, project, session, dt, kind, role, text,
+                    lambda b, a, x, f=path, o=offset: _jsonl_context(f, o, b, a, classify, keep, x),
+                )
 
 
 def claude_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
@@ -972,169 +980,69 @@ def hermes_hits(pattern, project_filter, since, newest_first=False, extra=frozen
 
 # --- Antigravity CLI ---------------------------------------------------------
 
-# agy keeps one SQLite database per conversation. Each row of `steps` is one step of the
-# conversation, its `step_payload` a protobuf message with no published schema. The field
-# numbers below were read from this host's agy conversations.
-_AGY_USER, _AGY_REPLY = 14, 15
+# agy writes each conversation as brain/<id>/.system_generated/logs/transcript_full.jsonl, one step
+# per line with its type, created_at and content; replies also carry thinking and tool_calls.
+# The workspace is in conversation_summaries.db.
+_AGY_TRANSCRIPT = "transcript_full.jsonl"
+_AGY_TOOL_STEPS = _type_markers("GENERIC", "SYSTEM_MESSAGE", "CHECKPOINT")
 
 
-def _pb_fields(b):
-    """Yield (field, wire type, value) for a protobuf message; ValueError if b is not one."""
-    i = 0
-    while i < len(b):
-        key, i = _pb_varint(b, i)
-        field, wire = key >> 3, key & 7
-        if wire == 0:
-            value, i = _pb_varint(b, i)
-        elif wire == 2:
-            n, i = _pb_varint(b, i)
-            value, i = b[i:i + n], i + n
-        elif wire in (1, 5):
-            n = 8 if wire == 1 else 4
-            value, i = b[i:i + n], i + n
-        else:
-            raise ValueError(f"unsupported wire type {wire}")
-        if field == 0 or i > len(b):
-            raise ValueError("truncated message")
-        yield field, wire, value
-
-
-def _pb_varint(b, i):
-    value = shift = 0
-    while True:
-        if i >= len(b):
-            raise ValueError("truncated varint")
-        c = b[i]
-        i += 1
-        value |= (c & 0x7F) << shift
-        shift += 7
-        if c < 0x80:
-            return value, i
-
-
-def _pb_values(b, field):
-    try:
-        return [v for f, _, v in _pb_fields(b) if f == field]
-    except ValueError:
-        return []
-
-
-def _pb_get(b, *path):
-    """The first value at a path of field numbers, or None."""
-    for field in path:
-        values = _pb_values(b, field) if isinstance(b, bytes) else []
-        if not values:
-            return None
-        b = values[0]
-    return b
-
-
-_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-
-
-def _pb_text(b):
-    """b as text when it decodes as UTF-8 without control characters other than whitespace."""
-    try:
-        text = b.decode("utf-8")
-    except (AttributeError, UnicodeDecodeError):
-        return None
-    return None if _CONTROL_CHARS.search(text) else text
-
-
-def _pb_strings(b, skip=(), depth=0):
-    """Every string in a message, in field order, treating a field as text when it reads as text."""
-    out = []
-    try:
-        for field, wire, value in _pb_fields(b):
-            if wire != 2 or not value or field in skip:
-                continue
-            text = _pb_text(value)
-            if text is not None:
-                out.append(text)
-            elif depth < 12:
-                out.extend(_pb_strings(value, depth=depth + 1))
-    except ValueError:
-        pass
-    return out
-
-
-def _agy_entries(step_type, payload, extra):
-    """[(dt, type, role, text)] for one agy step, leaving out tool steps unless extra has "tool"."""
-    if step_type not in (_AGY_USER, _AGY_REPLY) and "tool" not in extra:
-        return []  # tool output is most of the history and costly to decode
-    stamp = _pb_get(payload, 5, 1)
-    seconds = _pb_get(stamp, 1) if stamp else None
-    dt = _from_epoch(seconds) if isinstance(seconds, int) else None
-    if step_type == _AGY_USER:
-        # Some prompts keep their text only in the structured copy at 19.3.1.
-        text = _pb_text(_pb_get(payload, 19, 2) or b"") or _pb_text(_pb_get(payload, 19, 3, 1) or b"")
-        return [(dt, "user", "user", text)] if text else []
-    if step_type == _AGY_REPLY:
-        reply = _pb_get(payload, 20) or b""
-        entries = []
-        for field, kind in ((3, "thinking"), (1, "assistant")):
-            text = _pb_text(_pb_get(reply, field) or b"")
-            if text:
-                entries.append((dt, kind, "assistant", text))
-        for call in _pb_values(reply, 7):
-            name = _pb_text(_pb_get(call, 2) or b"") or ""
-            entries.append((dt, "tool", "assistant", _tool_text(name, _pb_text(_pb_get(call, 3) or b"") or "")))
+def classify_agy_line(obj):
+    """[(type, role, text)] for one agy transcript step; tool output, notices and summaries are tool entries."""
+    stype, content = obj.get("type"), obj.get("content") or ""
+    if stype == "USER_INPUT":
+        text = content.removeprefix("<USER_REQUEST>").removesuffix("</USER_REQUEST>").strip()
+        return [("user", "user", text)] if text else []
+    if stype == "PLANNER_RESPONSE":
+        entries = [("thinking", "assistant", obj["thinking"])] if obj.get("thinking") else []
+        if content:
+            entries.append(("assistant", "assistant", content))
+        for call in obj.get("tool_calls") or []:
+            if isinstance(call, dict):
+                entries.append(("tool", "assistant", _tool_text(call.get("name", ""), call.get("args", ""))))
         return entries
-    # Tool results, notices, and errors: their text, without the step metadata in field 5.
-    text = "\n".join(t for t in _pb_strings(payload, skip=(5,)) if t.strip())
-    return [(dt, "tool", "tool", text)] if text else []
+    return [("tool", "tool", content)] if content else []
 
 
-def _agy_project(conn):
-    """The conversation's workspace with / replaced by -, as Claude Code names project directories."""
-    row = conn.execute("SELECT data FROM trajectory_metadata_blob").fetchone()
-    uri = _pb_text(_pb_get(row[0], 7) or b"") if row else None
-    return (uri or "").removeprefix("file://").replace("/", "-")
+def _keep_agy(line, extra):
+    return "tool" in extra or not _has_any(line, _AGY_TOOL_STEPS)
 
 
-_REGEX_SPECIAL = frozenset(".^$*+?{}[]\\|()")
+@functools.lru_cache(maxsize=None)
+def _agy_workspaces():
+    """Conversation id -> workspace path, from agy's conversation_summaries.db."""
+    path = _antigravity_dir() / "conversation_summaries.db"
+    if not path.exists():
+        return {}
+    try:
+        conn = _open_db(path)
+        with conn:
+            rows = conn.execute("SELECT conversation_id, workspace_uris FROM conversation_summaries").fetchall()
+    except sqlite3.Error as e:
+        print(f"warning: cannot read Antigravity workspaces at {path}: {e}", file=sys.stderr)
+        return {}
+    found = {}
+    for sid, uris in rows:
+        try:
+            first = (json.loads(uris) or [None])[0]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if isinstance(first, str):
+            found[sid] = first.removeprefix("file://")
+    return found
+
+
+def _agy_session_info(filepath):
+    """Project (the workspace with / replaced by -, as Claude names projects) and conversation id."""
+    sid = Path(filepath).parts[-4]  # brain/<id>/.system_generated/logs/transcript_full.jsonl
+    return _agy_workspaces().get(sid, "").replace("/", "-"), sid
 
 
 def antigravity_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
-    root = _antigravity_dir()
-    since_ts = since.timestamp() if since else None
-    files = []
-    for path in root.glob("*.db"):
-        if not _in_session(path.stem, session):
-            continue
-        try:
-            # The write-ahead log holds the newest steps, so it dates the conversation too.
-            mtime = max(p.stat().st_mtime for p in (path, path.with_name(path.name + "-wal")) if p.exists())
-        except OSError:
-            continue
-        if since_ts is None or mtime >= since_ts:
-            files.append((mtime, path))
-    files.sort(reverse=newest_first)
-    regex = _compile_ci(pattern)
-    literal = pattern.lower().encode() if pattern.isascii() and not _REGEX_SPECIAL & set(pattern) else None
-
-    def mentions(raw):
-        if literal is not None:
-            return literal in raw.lower()  # several times faster than a case-insensitive regex
-        return regex.search(raw.decode("utf-8", "ignore")) is not None
-
-    for _, path in files:
-        try:
-            conn = _open_db(path)
-            with conn:
-                project = _agy_project(conn)
-                if project_filter and project_filter.lower() not in project.lower():
-                    continue
-                steps = conn.execute("SELECT step_type, step_payload FROM steps ORDER BY idx").fetchall()
-        except sqlite3.Error as e:
-            print(f"warning: cannot read Antigravity history at {path}: {e}", file=sys.stderr)
-            continue
-        # Most conversations do not mention the pattern anywhere; skip them before decoding.
-        if not mentions(b"\0".join(payload for _, payload in steps if payload)):
-            continue
-        entries = [e for step_type, payload in steps if payload for e in _agy_entries(step_type, payload, extra)]
-        hits = list(_entry_hits("antigravity", project, path.stem, entries, regex))
-        yield from reversed(hits) if newest_first else hits
+    yield from _jsonl_hits(
+        "antigravity", [_antigravity_dir() / "brain"], pattern, since, classify_agy_line, _agy_session_info,
+        project_filter, _keep_agy, newest_first, extra, session=session, file_name=_AGY_TRANSCRIPT,
+    )
 
 
 # Agents this package searches: name -> (hits function, is there history here, label).
@@ -1143,7 +1051,7 @@ SOURCES = {
     "codex": (codex_hits, lambda: any(r.exists() for r in _codex_roots()), "Codex"),
     "opencode": (opencode_hits, lambda: _opencode_db().exists(), "OpenCode"),
     "hermes": (hermes_hits, lambda: _hermes_db().exists(), "Hermes"),
-    "antigravity": (antigravity_hits, lambda: any(_antigravity_dir().glob("*.db")), "Antigravity"),
+    "antigravity": (antigravity_hits, lambda: (_antigravity_dir() / "brain").exists(), "Antigravity"),
 }
 
 

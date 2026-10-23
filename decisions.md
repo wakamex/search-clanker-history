@@ -18,7 +18,7 @@ The tool now searches Claude Code, Codex, OpenCode, Hermes, and the Antigravity 
 | Devin CLI | Deferred | `sessions.db` is empty on this host and transcripts are exported as ATIF files; no sample to verify against |
 | Cursor Agent | Deferred | Chats are `store.db` files; the content encoding was not inspected |
 | Zcode | Deferred | Model I/O rollout files and a SQLite store exist, but no format description or sample message flow was checked |
-| Antigravity | Added for the CLI (`agy`) | One SQLite database per conversation under `~/.gemini/antigravity-cli/conversations`, with each step a protobuf message. The field numbers for prompts, replies, thoughts, and tool calls were read from 500 conversations on this host, and the remaining step types are kept as tool text. The older Antigravity editor's `.pb` conversation files are not read |
+| Antigravity | Added for the CLI (`agy`) | `agy` writes each conversation as JSON Lines in `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`, with named fields for the step type, content, thinking, and tool calls, so it shares the JSONL search engine with Claude Code and Codex. The workspace comes from `conversation_summaries.db`. The per-conversation SQLite databases in `conversations/` hold the same steps as undocumented protobuf and are not read. The older Antigravity editor's `.pb` conversation files are not read either |
 | DeepSeek Harness | Deferred | No session files found under `~/.dsh` |
 
 Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against.
