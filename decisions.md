@@ -14,14 +14,14 @@ The tool now searches Claude Code, Codex, OpenCode, Hermes, and the Antigravity 
 | Codex | Added | JSONL rollout files under `sessions/` and `archived_sessions/`; 300+ sessions on this host exercise the parser |
 | OpenCode | Added | SQLite `opencode.db` with `session`, `message`, and `part` tables; text and tool parts are searched |
 | Hermes | Added | SQLite `state.db` with `sessions` and `messages` tables |
-| Grok Build | Deferred | `chat_history.jsonl` exists, but the two sessions on this host contain only system and user entries, so the assistant and tool shapes are unverified |
-| Devin CLI | Deferred | `sessions.db` is empty on this host and transcripts are exported as ATIF files; no sample to verify against |
+| Grok Build | Deferred | `~/.grok/sessions/<URL-encoded working directory>/<id>/chat_history.jsonl`; the assistant and tool shapes are unverified |
+| Devin CLI | Deferred | `~/.local/share/devin/cli/sessions.db` has `sessions` and `message_nodes` tables with real sessions to verify an adapter against |
 | Cursor Agent | Deferred | Chats are `store.db` files; the content encoding was not inspected |
 | Zcode | Deferred | Model I/O rollout files and a SQLite store exist, but no format description or sample message flow was checked |
 | Antigravity | Added for the CLI (`agy`) | `agy` writes each conversation as JSON Lines in `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`, with named fields for the step type, content, thinking, and tool calls, so it shares the JSONL search engine with Claude Code and Codex. The workspace comes from `conversation_summaries.db`. The per-conversation SQLite databases in `conversations/` hold the same steps as undocumented protobuf and are not read. The older Antigravity editor's `.pb` conversation files are not read either |
-| DeepSeek Harness | Deferred | No session files found under `~/.dsh` |
+| DeepSeek Harness | Deferred | Sessions are Zstandard-compressed JSON Lines under `~/.dsh/sessions/<project>/session-<id>/session.v3.jsonl.zstd` |
 
-Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against.
+Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against. Gemini CLI (`~/.gemini/tmp/<project hash>/chats/*.json`) is not listed by AOP but is also unread here.
 
 ## Design choices
 
