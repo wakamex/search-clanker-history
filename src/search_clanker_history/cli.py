@@ -9,6 +9,7 @@ Usage:
     sch "git-log-list" --type user
     sch "git-log-list" -B 2 -A 2
     sch "make_key" --tools
+    sch "harness behavior" --thinking
 """
 
 import argparse
@@ -48,6 +49,18 @@ def _opencode_db():
 
 def _hermes_db():
     return _env_path("HERMES_HOME", Path.home() / ".hermes") / "state.db"
+
+
+def _antigravity_dir():
+    return Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+
+
+# Message kinds hidden unless asked for: --tools shows "tool", --thinking shows "thinking".
+_OPTIONAL_KINDS = frozenset({"tool", "thinking"})
+
+
+def _visible(kind, extra):
+    return kind not in _OPTIONAL_KINDS or kind in extra
 
 
 _DIST_NAME = "search-clanker-history"
@@ -201,9 +214,9 @@ def classify_line(obj):
         return ("user", "user", content)
 
     if isinstance(content, list):
-        # Thinking-only blocks — skip
         if all(b.get("type") == "thinking" for b in content):
-            return None
+            text = "\n".join(b.get("thinking") or "" for b in content).strip()
+            return ("thinking", role, text) if text else None
 
         content_types = {b.get("type") for b in content}
         is_tool = bool(content_types & {"tool_use", "tool_result"})
@@ -521,6 +534,10 @@ def classify_codex_line(obj):
         if not text or (role == "user" and text.startswith(_CODEX_INJECTED_PREFIXES)):
             return None
         return (role, role, text)
+    if ptype == "reasoning":
+        parts = [*(p.get("summary") or []), *(p.get("content") or [])]
+        text = "\n".join(b.get("text", "") for b in parts if isinstance(b, dict)).strip()
+        return ("thinking", "assistant", text) if text else None
     if ptype in ("function_call", "custom_tool_call"):
         detail = p.get("arguments") or p.get("input") or ""
         if not isinstance(detail, str):
@@ -561,8 +578,9 @@ _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 class Hit:
     """One matching message, normalized across agents.
 
-    context(before, after, tools) returns (before_entries, after_entries), each a list of
-    (type, role, text) tuples. Tool entries count toward before and after only when tools is set.
+    context(before, after, extra) returns (before_entries, after_entries), each a list of
+    (type, role, text) tuples. Tool and thinking entries count toward before and after only
+    when their kind is in the set extra.
     """
 
     def __init__(self, source, project, session, dt, kind, role, text, context):
@@ -605,30 +623,30 @@ def _lines_before(f, offset):
     yield head
 
 
-def _context_entries(lines, n, classify, keep, tools):
+def _context_entries(lines, n, classify, keep, extra):
     """The first n entries among `lines` that the search would show."""
     found = []
     if n <= 0:
         return found
     for raw in itertools.islice(lines, _CONTEXT_SCAN_LINES):
-        if not keep(raw, tools):
+        if not keep(raw, extra):
             continue
         try:
             entry = classify(json.loads(raw))
         except json.JSONDecodeError:
             continue
-        if entry and (tools or entry[0] != "tool"):
+        if entry and _visible(entry[0], extra):
             found.append(entry)
             if len(found) == n:
                 break
     return found
 
 
-def _jsonl_context(filepath, offset, before, after, classify, keep, tools):
+def _jsonl_context(filepath, offset, before, after, classify, keep, extra):
     try:
         with open(filepath, "rb") as f:
-            earlier = _context_entries(_lines_before(f, offset), before, classify, keep, tools)
-            later = _context_entries(_lines_after(f, offset), after, classify, keep, tools)
+            earlier = _context_entries(_lines_before(f, offset), before, classify, keep, extra)
+            later = _context_entries(_lines_after(f, offset), after, classify, keep, extra)
     except OSError:
         return [], []
     return earlier[::-1], later
@@ -636,21 +654,22 @@ def _jsonl_context(filepath, offset, before, after, classify, keep, tools):
 
 # Cheap byte-level checks that drop lines classify would discard as tool traffic, so the
 # (often huge) tool results are never decoded or parsed unless --tools asks for them.
+# `extra` is the set of optional kinds the search shows.
 def _type_markers(*names):
     """Byte forms of `"type":"name"` members, compact and spaced, for each name."""
     return tuple(f'"type":{sp}"{n}"'.encode() for n in names for sp in ("", " "))
 
 
 _TEXT, _TOOL = _type_markers("text"), _type_markers("tool_result", "tool_use")
-_MESSAGE = _type_markers("message")
+_MESSAGE, _REASONING = _type_markers("message"), _type_markers("reasoning")
 
 
 def _has_any(line, markers):
     return any(m in line for m in markers)
 
 
-def _keep_claude(line, tools):
-    return tools or _has_any(line, _TEXT) or not _has_any(line, _TOOL)
+def _keep_claude(line, extra):
+    return "tool" in extra or _has_any(line, _TEXT) or not _has_any(line, _TOOL)
 
 
 # Codex message lines start `{"timestamp":...,("ordinal":N,)"type":"response_item","payload":{"type":"message"`;
@@ -660,10 +679,13 @@ _CODEX_MESSAGE_PREFIX = (
     r'^\{\s*"timestamp"\s*:\s*"[^"]*"\s*,\s*(?:"ordinal"\s*:\s*[0-9]+\s*,\s*)?'
     r'"type"\s*:\s*"response_item"\s*,\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"message"'
 )
+_CODEX_MESSAGE_OR_REASONING_PREFIX = _CODEX_MESSAGE_PREFIX[:-len('"message"')] + '"(?:message|reasoning)"'
 
 
-def _keep_codex(line, tools):
-    return tools or _has_any(line, _MESSAGE)
+def _keep_codex(line, extra):
+    if "tool" in extra:
+        return True
+    return _has_any(line, _MESSAGE) or ("thinking" in extra and _has_any(line, _REASONING))
 
 
 _BATCH_FILES_UNBOUNDED = 256
@@ -671,7 +693,7 @@ _BATCH_FILES_NEWEST_FIRST = 32
 
 
 def _jsonl_hits(
-    source, roots, pattern, since, classify, session_info, project_filter, keep, newest_first, tools,
+    source, roots, pattern, since, classify, session_info, project_filter, keep, newest_first, extra,
     line_prefix=None,
 ):
     """Yield hits oldest file first (lines ascending), or newest first with lines descending.
@@ -688,8 +710,9 @@ def _jsonl_hits(
     for i in range(0, len(files), size):
         rank = {path: n for n, (_, path) in enumerate(files[i:i + size])}
         found = {}
-        for path, offset, line in _scan(pattern, list(rank), lambda raw: keep(raw, tools), None if tools else line_prefix):
-            if (path, offset) not in found and keep(line, tools):
+        prefix = None if "tool" in extra else line_prefix(extra) if callable(line_prefix) else line_prefix
+        for path, offset, line in _scan(pattern, list(rank), lambda raw: keep(raw, extra), prefix):
+            if (path, offset) not in found and keep(line, extra):
                 found[(path, offset)] = line
         order = sorted(found, key=lambda k: (rank[k[0]], -k[1] if newest_first else k[1]))
         for path, offset in order:
@@ -704,21 +727,22 @@ def _jsonl_hits(
             kind, role, text = info
             yield Hit(
                 source, project, session, _parse_iso_ts(obj.get("timestamp", "")), kind, role, text,
-                lambda b, a, t, f=path, o=offset: _jsonl_context(f, o, b, a, classify, keep, t),
+                lambda b, a, x, f=path, o=offset: _jsonl_context(f, o, b, a, classify, keep, x),
             )
 
 
-def claude_hits(pattern, project_filter, since, newest_first=False, tools=False):
+def claude_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
     yield from _jsonl_hits(
         "claude", _claude_roots(), pattern, since, classify_line, parse_session_info,
-        project_filter, _keep_claude, newest_first, tools,
+        project_filter, _keep_claude, newest_first, extra,
     )
 
 
-def codex_hits(pattern, project_filter, since, newest_first=False, tools=False):
+def codex_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
     yield from _jsonl_hits(
         "codex", _codex_roots(), pattern, since, classify_codex_line, _codex_session_info,
-        project_filter, _keep_codex, newest_first, tools, line_prefix=_CODEX_MESSAGE_PREFIX,
+        project_filter, _keep_codex, newest_first, extra,
+        line_prefix=lambda extra: _CODEX_MESSAGE_OR_REASONING_PREFIX if "thinking" in extra else _CODEX_MESSAGE_PREFIX,
     )
 
 
@@ -775,7 +799,7 @@ def file_hits(path, pattern, project_filter, newest_first=False):
     for i, (n, dt, text) in enumerate(entries):
         if regex.search(text):
 
-            def context(b, a, tools, i=i):
+            def context(b, a, extra, i=i):
                 earlier = [("chat", None, e[2]) for e in entries[max(0, i - b):i]] if b > 0 else []
                 return earlier, [("chat", None, e[2]) for e in entries[i + 1:i + 1 + max(a, 0)]]
 
@@ -801,14 +825,15 @@ def _open_db(path):
 def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_session, newest_first):
     """Shared driver: find candidate sessions, normalize each, yield matching entries.
 
-    candidate_sql selects session ids whose raw rows match `?`. load_session(conn, sid)
-    returns (project, [(dt, type, role, text)]).
+    candidate_sql selects session ids whose raw rows match `?`, or is a function of the
+    connection that returns that SQL. load_session(conn, sid) returns (project, [(dt, type, role, text)]).
     """
     if not db_path.exists():
         return
     try:
         conn = _open_db(db_path)
-        sessions = [r[0] for r in conn.execute(candidate_sql, (pattern,) * candidate_sql.count("?"))]
+        sql = candidate_sql(conn) if callable(candidate_sql) else candidate_sql
+        sessions = [r[0] for r in conn.execute(sql, (pattern,) * sql.count("?"))]
     except sqlite3.Error as e:
         print(f"warning: cannot read {source} history at {db_path}: {e}", file=sys.stderr)
         return
@@ -819,18 +844,23 @@ def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_sessi
             project, entries = load_session(conn, sid)
             if project_filter and project_filter.lower() not in project.lower():
                 continue
-            for i, (dt, kind, role, text) in enumerate(entries):
-                if not regex.search(text):
-                    continue
-
-                def context(b, a, tools, entries=entries, i=i):
-                    earlier = [e[1:] for e in entries[:i] if tools or e[1] != "tool"]
-                    later = [e[1:] for e in entries[i + 1:] if tools or e[1] != "tool"]
-                    return earlier[-b:] if b > 0 else [], later[:max(a, 0)]
-
-                hits.append(Hit(source, project, sid, dt, kind, role, text, context))
+            hits.extend(_entry_hits(source, project, sid, entries, regex))
     hits.sort(key=lambda h: h.dt or _EPOCH, reverse=newest_first)
     yield from hits
+
+
+def _entry_hits(source, project, sid, entries, regex):
+    """Hits for the entries [(dt, type, role, text)] of one loaded session that match regex."""
+    for i, (dt, kind, role, text) in enumerate(entries):
+        if not regex.search(text):
+            continue
+
+        def context(b, a, extra, i=i):
+            earlier = [e[1:] for e in entries[:i] if _visible(e[1], extra)]
+            later = [e[1:] for e in entries[i + 1:] if _visible(e[1], extra)]
+            return earlier[-b:] if b > 0 else [], later[:max(a, 0)]
+
+        yield Hit(source, project, sid, dt, kind, role, text, context)
 
 
 def _from_epoch(value, divisor=1):
@@ -867,6 +897,8 @@ def _opencode_load(conn, sid):
         dt = _from_epoch(created, 1000)
         if part.get("type") == "text" and role in ("user", "assistant") and part.get("text"):
             entries.append((dt, role, role, part["text"]))
+        elif part.get("type") == "reasoning" and part.get("text"):
+            entries.append((dt, "thinking", "assistant", part["text"]))
         elif part.get("type") == "tool":
             state = part.get("state", {})
             output = state.get("output") or ""
@@ -876,11 +908,17 @@ def _opencode_load(conn, sid):
     return project, entries
 
 
-def opencode_hits(pattern, project_filter, since, newest_first=False, tools=False):
+def opencode_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
     yield from _db_hits(
         "opencode", _opencode_db(), pattern, project_filter,
         "SELECT DISTINCT session_id FROM part WHERE data REGEXP ?", _opencode_load, newest_first,
     )
+
+
+def _hermes_reasoning_sql(conn):
+    """SQL for a message's reasoning text; older databases have no reasoning column."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
+    return "reasoning" if "reasoning" in columns else "NULL"
 
 
 def _hermes_load(conn, sid):
@@ -888,17 +926,19 @@ def _hermes_load(conn, sid):
     project = ((row[0] or "").replace("/", "-") or row[1] or "") if row else ""
     entries = []
     rows = conn.execute(
-        "SELECT role, content, tool_calls, tool_name, timestamp FROM messages "
+        f"SELECT role, content, tool_calls, tool_name, timestamp, {_hermes_reasoning_sql(conn)} FROM messages "
         "WHERE session_id = ? ORDER BY timestamp, id",
         (sid,),
     )
-    for role, content, tool_calls, tool_name, ts in rows:
+    for role, content, tool_calls, tool_name, ts, reasoning in rows:
         dt = _from_epoch(ts)
         if role == "tool":
             entries.append((dt, "tool", "tool", f"[{tool_name or 'tool'}]\n{content or ''}"))
             continue
         if role not in ("user", "assistant"):
             continue
+        if reasoning:
+            entries.append((dt, "thinking", role, reasoning))
         if content:
             entries.append((dt, role, role, content))
         if tool_calls:
@@ -911,12 +951,177 @@ def _hermes_load(conn, sid):
     return project, entries
 
 
-def hermes_hits(pattern, project_filter, since, newest_first=False, tools=False):
+def hermes_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
     yield from _db_hits(
         "hermes", _hermes_db(), pattern, project_filter,
-        "SELECT DISTINCT session_id FROM messages WHERE content REGEXP ? OR tool_calls REGEXP ?",
+        lambda conn: "SELECT DISTINCT session_id FROM messages WHERE content REGEXP ? OR tool_calls REGEXP ?"
+        + (f" OR {_hermes_reasoning_sql(conn)} REGEXP ?" if "thinking" in extra else ""),
         _hermes_load, newest_first,
     )
+
+
+# --- Antigravity CLI ---------------------------------------------------------
+
+# agy keeps one SQLite database per conversation. Each row of `steps` is one step of the
+# conversation, its `step_payload` a protobuf message with no published schema. The field
+# numbers below were read from this host's agy conversations.
+_AGY_USER, _AGY_REPLY = 14, 15
+
+
+def _pb_fields(b):
+    """Yield (field, wire type, value) for a protobuf message; ValueError if b is not one."""
+    i = 0
+    while i < len(b):
+        key, i = _pb_varint(b, i)
+        field, wire = key >> 3, key & 7
+        if wire == 0:
+            value, i = _pb_varint(b, i)
+        elif wire == 2:
+            n, i = _pb_varint(b, i)
+            value, i = b[i:i + n], i + n
+        elif wire in (1, 5):
+            n = 8 if wire == 1 else 4
+            value, i = b[i:i + n], i + n
+        else:
+            raise ValueError(f"unsupported wire type {wire}")
+        if field == 0 or i > len(b):
+            raise ValueError("truncated message")
+        yield field, wire, value
+
+
+def _pb_varint(b, i):
+    value = shift = 0
+    while True:
+        if i >= len(b):
+            raise ValueError("truncated varint")
+        c = b[i]
+        i += 1
+        value |= (c & 0x7F) << shift
+        shift += 7
+        if c < 0x80:
+            return value, i
+
+
+def _pb_values(b, field):
+    try:
+        return [v for f, _, v in _pb_fields(b) if f == field]
+    except ValueError:
+        return []
+
+
+def _pb_get(b, *path):
+    """The first value at a path of field numbers, or None."""
+    for field in path:
+        values = _pb_values(b, field) if isinstance(b, bytes) else []
+        if not values:
+            return None
+        b = values[0]
+    return b
+
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _pb_text(b):
+    """b as text when it decodes as UTF-8 without control characters other than whitespace."""
+    try:
+        text = b.decode("utf-8")
+    except (AttributeError, UnicodeDecodeError):
+        return None
+    return None if _CONTROL_CHARS.search(text) else text
+
+
+def _pb_strings(b, skip=(), depth=0):
+    """Every string in a message, in field order, treating a field as text when it reads as text."""
+    out = []
+    try:
+        for field, wire, value in _pb_fields(b):
+            if wire != 2 or not value or field in skip:
+                continue
+            text = _pb_text(value)
+            if text is not None:
+                out.append(text)
+            elif depth < 12:
+                out.extend(_pb_strings(value, depth=depth + 1))
+    except ValueError:
+        pass
+    return out
+
+
+def _agy_entries(step_type, payload, extra):
+    """[(dt, type, role, text)] for one agy step, leaving out tool steps unless extra has "tool"."""
+    if step_type not in (_AGY_USER, _AGY_REPLY) and "tool" not in extra:
+        return []  # tool output is most of the history and costly to decode
+    stamp = _pb_get(payload, 5, 1)
+    seconds = _pb_get(stamp, 1) if stamp else None
+    dt = _from_epoch(seconds) if isinstance(seconds, int) else None
+    if step_type == _AGY_USER:
+        text = _pb_text(_pb_get(payload, 19, 2) or b"")
+        return [(dt, "user", "user", text)] if text else []
+    if step_type == _AGY_REPLY:
+        reply = _pb_get(payload, 20) or b""
+        entries = []
+        for field, kind in ((3, "thinking"), (1, "assistant")):
+            text = _pb_text(_pb_get(reply, field) or b"")
+            if text:
+                entries.append((dt, kind, "assistant", text))
+        for call in _pb_values(reply, 7):
+            name = _pb_text(_pb_get(call, 2) or b"") or ""
+            entries.append((dt, "tool", "assistant", _tool_text(name, _pb_text(_pb_get(call, 3) or b"") or "")))
+        return entries
+    # Tool results, notices, and errors: their text, without the step metadata in field 5.
+    text = "\n".join(t for t in _pb_strings(payload, skip=(5,)) if t.strip())
+    return [(dt, "tool", "tool", text)] if text else []
+
+
+def _agy_project(conn):
+    """The conversation's workspace with / replaced by -, as Claude Code names project directories."""
+    row = conn.execute("SELECT data FROM trajectory_metadata_blob").fetchone()
+    uri = _pb_text(_pb_get(row[0], 7) or b"") if row else None
+    return (uri or "").removeprefix("file://").replace("/", "-")
+
+
+_REGEX_SPECIAL = frozenset(".^$*+?{}[]\\|()")
+
+
+def antigravity_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
+    root = _antigravity_dir()
+    since_ts = since.timestamp() if since else None
+    files = []
+    for path in root.glob("*.db"):
+        try:
+            # The write-ahead log holds the newest steps, so it dates the conversation too.
+            mtime = max(p.stat().st_mtime for p in (path, path.with_name(path.name + "-wal")) if p.exists())
+        except OSError:
+            continue
+        if since_ts is None or mtime >= since_ts:
+            files.append((mtime, path))
+    files.sort(reverse=newest_first)
+    regex = _compile_ci(pattern)
+    literal = pattern.lower().encode() if pattern.isascii() and not _REGEX_SPECIAL & set(pattern) else None
+
+    def mentions(raw):
+        if literal is not None:
+            return literal in raw.lower()  # several times faster than a case-insensitive regex
+        return regex.search(raw.decode("utf-8", "ignore")) is not None
+
+    for _, path in files:
+        try:
+            conn = _open_db(path)
+            with conn:
+                project = _agy_project(conn)
+                if project_filter and project_filter.lower() not in project.lower():
+                    continue
+                steps = conn.execute("SELECT step_type, step_payload FROM steps ORDER BY idx").fetchall()
+        except sqlite3.Error as e:
+            print(f"warning: cannot read Antigravity history at {path}: {e}", file=sys.stderr)
+            continue
+        # Most conversations do not mention the pattern anywhere; skip them before decoding.
+        if not mentions(b"\0".join(payload for _, payload in steps if payload)):
+            continue
+        entries = [e for step_type, payload in steps if payload for e in _agy_entries(step_type, payload, extra)]
+        hits = list(_entry_hits("antigravity", project, path.stem, entries, regex))
+        yield from reversed(hits) if newest_first else hits
 
 
 # Agents this package searches: name -> (hits function, is there history here, label).
@@ -925,6 +1130,7 @@ SOURCES = {
     "codex": (codex_hits, lambda: any(r.exists() for r in _codex_roots()), "Codex"),
     "opencode": (opencode_hits, lambda: _opencode_db().exists(), "OpenCode"),
     "hermes": (hermes_hits, lambda: _hermes_db().exists(), "Hermes"),
+    "antigravity": (antigravity_hits, lambda: any(_antigravity_dir().glob("*.db")), "Antigravity"),
 }
 
 
@@ -1066,6 +1272,11 @@ class _VersionAction(argparse.Action):
         parser.exit()
 
 
+def _label(kind, role):
+    """The tag shown before a message: its role, or "thinking" for reasoning."""
+    return "thinking" if kind == "thinking" else role
+
+
 def format_role(role):
     """The role tag and its trailing space; chat log messages carry their sender in the text."""
     if role is None:
@@ -1122,6 +1333,10 @@ def main():
         help="Include tool_use/tool_result messages (skipped by default)",
     )
     parser.add_argument(
+        "--thinking", action="store_true",
+        help="Include the agents' reasoning where their history keeps it as text (skipped by default)",
+    )
+    parser.add_argument(
         "-C", "--context", type=int, default=200, metavar="CHARS",
         help="Chars of text shown on each side of the match (default 200); 0 shows whole messages",
     )
@@ -1157,8 +1372,8 @@ def main():
     if args.file:
         if args.agent:
             parser.error("--file searches only the named files and cannot be combined with --agent")
-        if args.type or args.tools:
-            parser.error("-t and --tools apply to agent history; match a sender in a chat log with ^NAME:")
+        if args.type or args.tools or args.thinking:
+            parser.error("-t, --tools and --thinking apply to agent history; match a sender in a chat log with ^NAME:")
         unreadable = [str(f) for f in args.file if not f.is_file()]
         if unreadable:
             print(f"Error: no such file: {', '.join(unreadable)}", file=sys.stderr)
@@ -1186,8 +1401,10 @@ def main():
             print(hint, file=sys.stderr)
         sys.exit(1)
 
+    extra = frozenset(kind for kind, on in (("tool", args.tools), ("thinking", args.thinking)) if on)
+
     def accepted(hit):
-        if hit.kind == "tool" and not args.tools:
+        if not _visible(hit.kind, extra):
             return False
         if args.type and hit.role != args.type:
             return False
@@ -1205,7 +1422,7 @@ def main():
             hits = sources[name](newest_first)
         else:
             hits = SOURCES[name][0](
-                args.pattern, args.project, args.since, newest_first=newest_first, tools=args.tools
+                args.pattern, args.project, args.since, newest_first=newest_first, extra=extra
             )
         return (h for h in hits if accepted(h))
 
@@ -1226,7 +1443,7 @@ def main():
     for hit in hits:
         before_lines, after_lines = [], []
         if args.B > 0 or args.A > 0:
-            before_lines, after_lines = hit.context(args.B, args.A, args.tools)
+            before_lines, after_lines = hit.context(args.B, args.A, extra)
 
         short_session = hit.session[:8] if hit.session else "?"
         if hit.source == "file":
@@ -1240,16 +1457,16 @@ def main():
             print()
         print(header)
 
-        for _, r, t in before_lines:
+        for k, r, t in before_lines:
             t_short = truncate_around_match(t, regex, args.context).replace("\n", " ")
-            print(f"  {DIM()}{format_role(r)}{t_short}{RESET()}")
+            print(f"  {DIM()}{format_role(_label(k, r))}{t_short}{RESET()}")
 
         text_short = truncate_around_match(hit.text, regex, args.context).replace("\n", " ")
-        print(f"{marker} {format_role(hit.role)}{highlight_pattern(text_short, regex)}")
+        print(f"{marker} {format_role(_label(hit.kind, hit.role))}{highlight_pattern(text_short, regex)}")
 
-        for _, r, t in after_lines:
+        for k, r, t in after_lines:
             t_short = truncate_around_match(t, regex, args.context).replace("\n", " ")
-            print(f"  {DIM()}{format_role(r)}{t_short}{RESET()}")
+            print(f"  {DIM()}{format_role(_label(k, r))}{t_short}{RESET()}")
 
         printed_count += 1
 

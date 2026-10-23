@@ -6,6 +6,7 @@ Search across your coding-agent session history for keywords or patterns. It cov
 - [Codex](https://github.com/openai/codex)
 - [OpenCode](https://github.com/anomalyco/opencode)
 - [Hermes](https://github.com/NousResearch/hermes-agent)
+- [Antigravity CLI](https://antigravity.google/) (`agy`)
 
 In the examples, `sch` stands for the command, `search-clanker-history` (see Packages and commands below for a one-line alias).
 
@@ -69,12 +70,12 @@ sch <pattern> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, or `hermes`. Repeat the flag to search several. Overrides the default agents for this search |
+| `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, `hermes`, or `antigravity`. Repeat the flag to search several. Overrides the default agents for this search |
 | `--file PATH` | Search a chat log instead of agent history (repeatable). See Chat logs below |
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
 | `-t`, `--type` | Filter by role: `user` or `assistant` |
-| `-A N` | Show N messages after each match. Tool messages count only with `--tools`, and with `-A` or `-B` the matching message is marked `>` |
+| `-A N` | Show N messages after each match. Tool messages count only with `--tools`, and reasoning only with `--thinking`, and with `-A` or `-B` the matching message is marked `>` |
 | `-B N` | Show N messages before each match |
 | `-C`, `--context` | Chars of text shown on each side of the match (default 200); `0` shows whole messages |
 | `-i`, `--ignore-case` | Accepted for grep users; matching is always case-insensitive |
@@ -82,6 +83,7 @@ sch <pattern> [options]
 | `--until TIME` | Only messages at/before TIME (same formats as `--since`) |
 | `-n`, `--limit N` | Only the N most recent matches (printed oldest first). Scans newest files first and stops as soon as N are found |
 | `--tools` | Include tool_use/tool_result messages (hidden by default) |
+| `--thinking` | Include the agents' reasoning, shown as `[thinking]`, where their history keeps it as text (hidden by default) |
 | `--no-color` | Disable colored output |
 
 ### Examples
@@ -92,6 +94,7 @@ sch "TypeError" --type assistant          # only assistant messages
 sch "deployment" -p myproject             # filter to a project
 sch "refactor" -B 1 -A 1                 # show surrounding messages
 sch "SELECT.*FROM" --tools               # search tool calls too
+sch "retry" --thinking                   # search the agents' reasoning too
 sch "deploy" --agent codex                # only Codex sessions
 sch "deploy" -n 5 -B 1                    # the 5 most recent matches, fast
 sch "deploy" --since 1w                   # only the last week
@@ -106,10 +109,15 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 | Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` rollout files | `CODEX_HOME` | Session working directory, with `/` replaced by `-` |
 | OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | `XDG_DATA_HOME` | Session directory, with `/` replaced by `-` |
 | Hermes | `~/.hermes/state.db` (SQLite) | `HERMES_HOME` | Session working directory, or its source such as `cli` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.db`, one SQLite database per conversation | none | Conversation workspace, with `/` replaced by `-` |
 
-Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
+Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given, and reasoning unless `--thinking` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
 
 Databases are opened read-only.
+
+Reasoning is searchable only where the history keeps it as text. Claude Code thinking blocks are text unless the model returned them redacted. Codex stores reasoning encrypted and keeps a readable summary only for some models, so most Codex reasoning cannot be searched. OpenCode reasoning parts, the Hermes `reasoning` column, and Antigravity thoughts are text.
+
+Antigravity stores each step of a conversation as a [Protocol Buffers](https://protobuf.dev/) message with no published schema. The tool reads the user prompts, replies, thoughts, and tool calls from the fields that hold them in current `agy` releases, and treats every other step, such as tool output and notices, as a tool entry. A search that includes Antigravity tool output with `--tools` decodes every step of each matching conversation, which takes several seconds on a large history.
 
 ## Chat logs
 

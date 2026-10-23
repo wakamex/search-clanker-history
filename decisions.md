@@ -4,7 +4,7 @@ Goal: make the tool (written `sch` here, an alias for `search-clanker-history`) 
 
 ## Result
 
-The tool now searches Claude Code, Codex, OpenCode, and Hermes. `--agent` limits a search to one or more of them; without it, every agent that has history on the machine is searched. Each result header names the agent.
+The tool now searches Claude Code, Codex, OpenCode, Hermes, and the Antigravity CLI. `--agent` limits a search to one or more of them; without it, every agent that has history on the machine is searched. Each result header names the agent.
 
 ## Coverage by harness
 
@@ -18,7 +18,7 @@ The tool now searches Claude Code, Codex, OpenCode, and Hermes. `--agent` limits
 | Devin CLI | Deferred | `sessions.db` is empty on this host and transcripts are exported as ATIF files; no sample to verify against |
 | Cursor Agent | Deferred | Chats are `store.db` files; the content encoding was not inspected |
 | Zcode | Deferred | Model I/O rollout files and a SQLite store exist, but no format description or sample message flow was checked |
-| Antigravity | Deferred | Conversations are protobuf (`.pb`) files; no decoder is available |
+| Antigravity | Added for the CLI (`agy`) | One SQLite database per conversation under `~/.gemini/antigravity-cli/conversations`, with each step a protobuf message. The field numbers for prompts, replies, thoughts, and tool calls were read from 500 conversations on this host, and the remaining step types are kept as tool text. The older Antigravity editor's `.pb` conversation files are not read |
 | DeepSeek Harness | Deferred | No session files found under `~/.dsh` |
 
 Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against.
@@ -43,7 +43,7 @@ Deferred harnesses can be added as one adapter each once a real session with ass
 8. Codex tool calls and outputs, OpenCode tool parts, and Hermes tool calls and results are classified as tool entries and hidden unless `--tools` is given, as for Claude Code.
 9. History locations follow each harness's own environment variables: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_DATA_HOME` for OpenCode, and `HERMES_HOME`. AOP's `AOP_*_SOURCE_HOME` variables are not used because they configure AOP, not the harness.
 10. SQLite files are opened read-only. A database that cannot be read prints a warning and the search continues with the other agents.
-11. Reasoning content is not searched for any agent, matching the existing behavior of skipping Claude thinking blocks.
+11. Reasoning is hidden unless `--thinking` is given, as tool entries are hidden unless `--tools` is given, and is labelled `[thinking]`. It is read where the history keeps it as text: Claude thinking blocks, Codex reasoning summaries (the rest of Codex reasoning is encrypted), OpenCode reasoning parts, the Hermes `reasoning` column where the database has one, and Antigravity thoughts. `--thinking` keeps the Codex line prefilter, widened to reasoning lines.
 12. Performance work is recorded in [performance.md](performance.md). Results are ordered oldest file first by default; `-n N` returns the N newest matches, still printed oldest first. Byte-level prefilters assume Claude and Codex write their type markers as `"type":"..."`, and tolerate one space after the colon.
 13. No persistent index or cache. The measurements and the revisit trigger are in performance.md.
 14. No version bump, tag, or release. Publishing is a separate decision.

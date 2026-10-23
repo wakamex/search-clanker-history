@@ -20,6 +20,30 @@ def record(role, text, timestamp):
     }
 
 
+def pb(*fields):
+    """Encode (field, value) pairs as a protobuf message: int values as varints, the rest as bytes."""
+    def varint(n):
+        out = b""
+        while True:
+            out += bytes([(n & 0x7F) | (0x80 if n > 0x7F else 0)])
+            n >>= 7
+            if not n:
+                return out
+    data = b""
+    for field, value in fields:
+        if isinstance(value, int):
+            data += varint(field << 3) + varint(value)
+        else:
+            value = value.encode() if isinstance(value, str) else value
+            data += varint(field << 3 | 2) + varint(len(value)) + value
+    return data
+
+
+def agy_step(step_type, seconds, *content):
+    """An agy step payload: its type, the step metadata with its time in field 5, then its content."""
+    return pb((1, step_type), (4, 3), (5, pb((1, pb((1, seconds), (2, 0))))), *content)
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, config_dir=None, home=None):
         env = dict(os.environ, NO_COLOR="1")
@@ -140,6 +164,103 @@ class CliTests(unittest.TestCase):
         self.assertIn("zorbify lives in utils", found.stdout)
         self.assertNotIn("where is the zorbify helper", found.stdout)
 
+    def test_antigravity_conversations_are_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            conversations = Path(temporary) / ".gemini" / "antigravity-cli" / "conversations"
+            conversations.mkdir(parents=True)
+            conn = sqlite3.connect(conversations / "1946fe8f-0000-0000-0000-000000000000.db")
+            conn.executescript(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB);"
+                "CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);"
+            )
+            conn.execute("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)", (pb((7, "file:///code/demo")),))
+            steps = [
+                (14, agy_step(14, 1767323045, (19, pb((2, "where is the glorpify helper"))))),
+                (15, agy_step(15, 1767323046, (20, pb(
+                    (3, "glorpify might be in utils, check first"),
+                    (7, pb((1, "call_1"), (2, "run_command"), (3, '{"CommandLine":"grep glorpify"}'))),
+                )))),
+                (132, agy_step(132, 1767323047, (140, pb((2, pb((1, "utils.py: def glorpify"))))))),
+                (15, agy_step(15, 1767323048, (20, pb((1, "glorpify is in utils"))))),
+            ]
+            for idx, (step_type, payload) in enumerate(steps):
+                conn.execute("INSERT INTO steps VALUES (?, ?, ?)", (idx, step_type, payload))
+            conn.commit()
+            conn.close()
+
+            plain = self.run_cli("search-clanker-history", "glorpify", "--agent", "antigravity", "-B", "1", home=temporary)
+            thinking = self.run_cli("search-clanker-history", "check first", "--thinking", home=temporary)
+            tools = self.run_cli("search-clanker-history", "def glorpify", "--tools", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("── 2026-01-02 03:04 | antigravity | -code-demo | session:1946fe8f ──", plain.stdout)
+        self.assertIn("> [user] where is the glorpify helper", plain.stdout)
+        self.assertIn("  [user] where is the glorpify helper", plain.stdout)
+        self.assertIn("> [assistant] glorpify is in utils", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("[thinking] glorpify might be in utils, check first", thinking.stdout)
+        self.assertIn("utils.py: def glorpify", tools.stdout)
+
+    def test_thinking_is_searched_only_with_the_flag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary) / ".claude"
+            project = config_dir / "projects" / "-code-demo"
+            project.mkdir(parents=True)
+            claude_thought = {**record("assistant", "", "2026-01-02T00:00:01Z"), "message": {
+                "role": "assistant", "content": [{"type": "thinking", "thinking": "the wibble is claude's", "signature": "x"}]}}
+            (project / "0123abcd-0000-0000-0000-000000000000.jsonl").write_text(json.dumps(claude_thought) + "\n")
+
+            day = Path(temporary) / ".codex" / "sessions" / "2026" / "01" / "02"
+            day.mkdir(parents=True)
+            sid = "01a10334-5465-7210-a943-b674c6eea5b6"
+            codex_lines = [
+                {"timestamp": "2026-01-02T00:00:00Z", "type": "session_meta", "payload": {"id": sid, "cwd": "/code/demo"}},
+                {"timestamp": "2026-01-02T00:00:02Z", "type": "response_item", "payload": {
+                    "type": "reasoning", "summary": [{"type": "summary_text", "text": "the wibble is codex's"}],
+                    "encrypted_content": "x"}},
+                {"timestamp": "2026-01-02T00:00:03Z", "type": "response_item", "payload": {
+                    "type": "reasoning", "summary": [], "encrypted_content": "wibble"}},
+            ]
+            (day / f"rollout-2026-01-02T00-00-00-{sid}.jsonl").write_text("\n".join(json.dumps(x) for x in codex_lines) + "\n")
+
+            db_dir = Path(temporary) / ".local" / "share" / "opencode"
+            db_dir.mkdir(parents=True)
+            conn = sqlite3.connect(db_dir / "opencode.db")
+            conn.executescript(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);"
+                "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);"
+                "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);"
+            )
+            conn.execute("INSERT INTO session VALUES ('ses_abc12345', '/code/demo')")
+            conn.execute("INSERT INTO message VALUES ('m1', 'ses_abc12345', ?)", (json.dumps({"role": "assistant"}),))
+            conn.execute("INSERT INTO part VALUES ('p1', 'm1', 'ses_abc12345', 1767312004000, ?)",
+                         (json.dumps({"type": "reasoning", "text": "the wibble is opencode's"}),))
+            conn.commit()
+            conn.close()
+
+            hermes = Path(temporary) / ".hermes"
+            hermes.mkdir()
+            conn = sqlite3.connect(hermes / "state.db")
+            conn.executescript(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, cwd TEXT);"
+                "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT,"
+                " content TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL, reasoning TEXT);"
+            )
+            conn.execute("INSERT INTO sessions VALUES ('20260102_abc', 'cli', '/code/demo')")
+            conn.execute("INSERT INTO messages (session_id, role, content, timestamp, reasoning) VALUES"
+                         " ('20260102_abc', 'assistant', 'done', 1767312005.0, 'the wibble is hermes''s')")
+            conn.commit()
+            conn.close()
+
+            hidden = self.run_cli("search-clanker-history", "wibble", config_dir=config_dir, home=temporary)
+            shown = self.run_cli("search-clanker-history", "wibble", "--thinking", config_dir=config_dir, home=temporary)
+
+        self.assertIn("No matches found.", hidden.stdout)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        for agent in ("claude", "codex", "opencode", "hermes"):
+            self.assertIn(f"[thinking] the wibble is {agent}'s", shown.stdout)
+        self.assertIn("4 match(es)", shown.stdout)
+
     def test_hermes_database_is_searched(self):
         with tempfile.TemporaryDirectory() as temporary:
             hermes = Path(temporary) / ".hermes"
@@ -164,12 +285,15 @@ class CliTests(unittest.TestCase):
 
             found = self.run_cli("search-clanker-history", "locate the blorpify", "-A", "1", home=temporary)
             other = self.run_cli("search-clanker-history", "blorpify", "--agent", "codex", home=temporary)
+            thinking = self.run_cli("search-clanker-history", "blorpify is", "--thinking", home=temporary)
 
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("| hermes | cli | session:20260102", found.stdout)
         self.assertIn("blorpify is in utils", found.stdout)
         self.assertEqual(other.returncode, 1)
         self.assertIn("no codex history found", other.stderr)
+        self.assertEqual(thinking.stderr, "")  # databases without a reasoning column still search
+        self.assertIn("blorpify is in utils", thinking.stdout)
 
     def write_sessions(self, config_dir, count):
         project = config_dir / "projects" / "-code-demo"
