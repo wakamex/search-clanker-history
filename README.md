@@ -7,6 +7,8 @@ Search across your coding-agent session history for keywords or patterns. It cov
 - [OpenCode](https://github.com/anomalyco/opencode)
 - [Hermes](https://github.com/NousResearch/hermes-agent)
 - [Antigravity CLI](https://antigravity.google/) (`agy`)
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+- Zcode
 
 In the examples, `sch` stands for the command, `search-clanker-history` (see Packages and commands below for a one-line alias).
 
@@ -70,7 +72,7 @@ sch <pattern> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, `hermes`, or `antigravity`. Repeat the flag to search several. Overrides the default agents for this search |
+| `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, `hermes`, `antigravity`, `gemini`, or `zcode`. Repeat the flag to search several. Overrides the default agents for this search |
 | `--file PATH` | Search a chat log instead of agent history (repeatable). See Chat logs below |
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
@@ -114,12 +116,14 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 | OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | `XDG_DATA_HOME` | Session directory, with `/` replaced by `-` |
 | Hermes | `~/.hermes/state.db` (SQLite) | `HERMES_HOME` | Session working directory, or its source such as `cli` |
 | Antigravity CLI | `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`, one transcript per conversation | none | Workspace from `conversation_summaries.db`, with `/` replaced by `-` |
+| Gemini CLI | `~/.gemini/tmp/<project>/chats/*.json` and `*.jsonl`, one file per chat | `GEMINI_CLI_HOME` (replaces `~`) | Project path from `~/.gemini/projects.json`, with `/` replaced by `-` |
+| Zcode | `~/.zcode/cli/db/db.sqlite` (SQLite, OpenCode's schema) | none | Session directory, with `/` replaced by `-` |
 
 Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given, and reasoning unless `--thinking` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
 
 Databases are opened read-only.
 
-Reasoning is searchable only where the history keeps it as text. Claude Code thinking blocks are text unless the model returned them redacted. Codex stores reasoning encrypted and keeps a readable summary only for some models, so most Codex reasoning cannot be searched. OpenCode reasoning parts, the Hermes `reasoning` column, and Antigravity thoughts are text.
+Reasoning is searchable only where the history keeps it as text. Claude Code thinking blocks are text unless the model returned them redacted. Codex stores reasoning encrypted and keeps a readable summary only for some models, so most Codex reasoning cannot be searched. OpenCode and Zcode reasoning parts, the Hermes `reasoning` column, Antigravity thoughts, and Gemini CLI thoughts are text.
 
 Antigravity transcripts hold each step with its type. Tool output (`GENERIC` steps), system messages, and checkpoint summaries are tool entries, shown with `--tools`. A conversation with no workspace in agy's summaries database shows an empty project and is not matched by `-p`.
 

@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -24,7 +25,7 @@ def record(role, text, timestamp):
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, config_dir=None, home=None, tz="UTC"):
         env = dict(os.environ, NO_COLOR="1", TZ=tz)
-        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR"):
+        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME"):
             env.pop(name, None)
         if home is not None:
             env["HOME"] = str(home)
@@ -241,6 +242,70 @@ class CliTests(unittest.TestCase):
         for agent in ("claude", "codex", "opencode", "hermes"):
             self.assertIn(f"[thinking] the wibble is {agent}'s", shown.stdout)
         self.assertIn("4 match(es)", shown.stdout)
+
+    def test_gemini_chats_are_searched_in_both_file_formats(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            gemini = Path(temporary) / ".gemini"
+            (gemini / "projects.json").parent.mkdir(parents=True)
+            (gemini / "projects.json").write_text(json.dumps({"projects": {"/code/demo": "demo", "/code/old": "old"}}))
+            old = gemini / "tmp" / hashlib.sha256(b"/code/old").hexdigest() / "chats"
+            old.mkdir(parents=True)
+            (old / "session-2026-01-01T00-00-aaaa1111.json").write_text(json.dumps({
+                "sessionId": "aaaa1111-0000", "messages": [
+                    {"id": "1", "timestamp": "2026-01-01T00:00:00Z", "type": "user", "content": "where is the snorfle helper"},
+                    {"id": "2", "timestamp": "2026-01-01T00:00:01Z", "type": "gemini", "content": "snorfle is in utils",
+                     "thoughts": [{"subject": "Searching", "description": "snorfle may be in utils"}],
+                     "toolCalls": [{"name": "grep", "args": {"pattern": "snorfle"}, "resultDisplay": "utils.py"}]},
+                ]}))
+            new = gemini / "tmp" / "demo" / "chats"
+            new.mkdir(parents=True)
+            lines = [
+                {"sessionId": "bbbb2222-0000", "projectHash": "x", "startTime": "2026-01-02T00:00:00Z"},
+                {"id": "u", "timestamp": "2026-01-02T00:00:00Z", "type": "user", "content": [{"text": "snorfle again"}]},
+                {"id": "g", "timestamp": "2026-01-02T00:00:01Z", "type": "gemini", "content": "draft"},
+                {"$set": {"lastUpdated": "2026-01-02T00:00:02Z"}},
+                {"id": "g", "timestamp": "2026-01-02T00:00:01Z", "type": "gemini", "content": "snorfle final answer"},
+            ]
+            (new / "session-2026-01-02T00-00-bbbb2222.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+
+            found = self.run_cli("search-clanker-history", "snorfle", "--agent", "gemini", home=temporary)
+            extra = self.run_cli("search-clanker-history", "snorfle", "--agent", "gemini", "--thinking", "--tools", "-p", "old", home=temporary)
+            one = self.run_cli("search-clanker-history", "snorfle", "-s", "bbbb", "-B", "1", home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("── 2026-01-01 00:00 | gemini | -code-old | session:aaaa1111 ──", found.stdout)
+        self.assertIn("| gemini | -code-demo | session:bbbb2222 ──", found.stdout)
+        self.assertIn("[assistant] snorfle final answer", found.stdout)
+        self.assertNotIn("draft", found.stdout)
+        self.assertIn("4 match(es)", found.stdout)
+        self.assertIn("[thinking] Searching: snorfle may be in utils", extra.stdout)
+        self.assertIn('[grep: {"pattern": "snorfle"}]', extra.stdout)
+        self.assertNotIn("again", extra.stdout)
+        self.assertIn("  [user] snorfle again", one.stdout)
+        self.assertNotIn("-code-old", one.stdout)
+
+    def test_zcode_database_is_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            db_dir = Path(temporary) / ".zcode" / "cli" / "db"
+            db_dir.mkdir(parents=True)
+            conn = sqlite3.connect(db_dir / "db.sqlite")
+            conn.executescript(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);"
+                "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);"
+                "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);"
+            )
+            conn.execute("INSERT INTO session VALUES ('sess_zc1', '/code/demo')")
+            conn.execute("INSERT INTO message VALUES ('m1', 'sess_zc1', ?)", (json.dumps({"role": "assistant"}),))
+            conn.execute("INSERT INTO part VALUES ('p1', 'm1', 'sess_zc1', 1767323046000, ?)",
+                         (json.dumps({"type": "text", "text": "the wuzzle is fixed"}),))
+            conn.commit()
+            conn.close()
+
+            found = self.run_cli("search-clanker-history", "wuzzle", home=temporary)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("| zcode | -code-demo | session:sess_zc1 ──", found.stdout)
+        self.assertIn("[assistant] the wuzzle is fixed", found.stdout)
 
     def test_hermes_database_is_searched(self):
         with tempfile.TemporaryDirectory() as temporary:

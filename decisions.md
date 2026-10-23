@@ -4,7 +4,7 @@ Goal: make the tool (written `sch` here, an alias for `search-clanker-history`) 
 
 ## Result
 
-The tool now searches Claude Code, Codex, OpenCode, Hermes, and the Antigravity CLI. `--agent` limits a search to one or more of them; without it, every agent that has history on the machine is searched. Each result header names the agent.
+The tool now searches Claude Code, Codex, OpenCode, Hermes, the Antigravity CLI, Gemini CLI, and Zcode. `--agent` limits a search to one or more of them; without it, every agent that has history on the machine is searched. Each result header names the agent.
 
 ## Coverage by harness
 
@@ -17,11 +17,12 @@ The tool now searches Claude Code, Codex, OpenCode, Hermes, and the Antigravity 
 | Grok Build | Deferred | `~/.grok/sessions/<URL-encoded working directory>/<id>/chat_history.jsonl`; the assistant and tool shapes are unverified |
 | Devin CLI | Deferred | `~/.local/share/devin/cli/sessions.db` has `sessions` and `message_nodes` tables with real sessions to verify an adapter against |
 | Cursor Agent | Deferred | Chats are `store.db` files; the content encoding was not inspected |
-| Zcode | Deferred | Model I/O rollout files and a SQLite store exist, but no format description or sample message flow was checked |
+| Zcode | Added | `~/.zcode/cli/db/db.sqlite` uses OpenCode's `session`, `message`, and `part` tables, so the OpenCode reader serves it. Zcode's code has no variable that moves this path |
 | Antigravity | Added for the CLI (`agy`) | `agy` writes each conversation as JSON Lines in `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`, with named fields for the step type, content, thinking, and tool calls, so it shares the JSONL search engine with Claude Code and Codex. The workspace comes from `conversation_summaries.db`. The per-conversation SQLite databases in `conversations/` hold the same steps as undocumented protobuf and are not read. The older Antigravity editor's `.pb` conversation files are not read either |
+| Gemini CLI | Added | Chats under `${GEMINI_CLI_HOME:-~}/.gemini/tmp/<project>/chats/`: older ones are one JSON document, newer ones JSON Lines that rewrite a message by appending it again with the same id, so the last version of each message is searched. Thoughts are read as reasoning and tool calls with their displayed result as tool entries. The project directory is named in `projects.json`, or is the SHA-256 of the project path in older homes |
 | DeepSeek Harness | Deferred | Sessions are Zstandard-compressed JSON Lines under `~/.dsh/sessions/<project>/session-<id>/session.v3.jsonl.zstd` |
 
-Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against. Gemini CLI (`~/.gemini/tmp/<project hash>/chats/*.json`) is not listed by AOP but is also unread here.
+Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against.
 
 ## Design choices
 

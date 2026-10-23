@@ -15,6 +15,7 @@ Usage:
 import argparse
 import concurrent.futures
 import functools
+import hashlib
 import itertools
 import json
 import mmap
@@ -49,6 +50,14 @@ def _opencode_db():
 
 def _hermes_db():
     return _env_path("HERMES_HOME", Path.home() / ".hermes") / "state.db"
+
+
+def _zcode_db():
+    return Path.home() / ".zcode" / "cli" / "db" / "db.sqlite"
+
+
+def _gemini_dir():
+    return _env_path("GEMINI_CLI_HOME", Path.home()) / ".gemini"
 
 
 def _antigravity_dir():
@@ -933,6 +942,14 @@ def opencode_hits(pattern, project_filter, since, newest_first=False, extra=froz
     )
 
 
+def zcode_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    # Zcode keeps its sessions in OpenCode's schema.
+    yield from _db_hits(
+        "zcode", _zcode_db(), pattern, project_filter,
+        "SELECT DISTINCT session_id FROM part WHERE data REGEXP ?", _opencode_load, newest_first, session,
+    )
+
+
 def _hermes_reasoning_sql(conn):
     """SQL for a message's reasoning text; older databases have no reasoning column."""
     columns = {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
@@ -976,6 +993,132 @@ def hermes_hits(pattern, project_filter, since, newest_first=False, extra=frozen
         + (f" OR {_hermes_reasoning_sql(conn)} REGEXP ?" if "thinking" in extra else ""),
         _hermes_load, newest_first, session,
     )
+
+
+# --- Gemini CLI --------------------------------------------------------------
+
+# Gemini CLI writes each chat to tmp/<project>/chats/: older chats as one JSON document with a
+# messages list, newer ones as JSON Lines that start with the chat's metadata, then append each
+# message and rewrite a message by appending it again with the same id. <project> is the name
+# projects.json gives a project's path, or, in older homes, the SHA-256 of that path.
+_REGEX_SPECIAL = frozenset(".^$*+?{}[]\\|()")
+
+
+def _mentions(pattern):
+    """A cheap check of a file's raw bytes that is true wherever the pattern can match."""
+    regex = _compile_ci(pattern)
+    if pattern.isascii() and not _REGEX_SPECIAL & set(pattern):
+        literal = pattern.lower().encode()
+        return lambda raw: literal in raw.lower()  # several times faster than a case-insensitive regex
+    return lambda raw: regex.search(raw.decode("utf-8", "ignore")) is not None
+
+
+@functools.lru_cache(maxsize=None)
+def _gemini_projects():
+    """Chat directory name -> project path."""
+    try:
+        projects = json.loads((_gemini_dir() / "projects.json").read_text())["projects"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    found = {}
+    for path, name in projects.items() if isinstance(projects, dict) else ():
+        found[hashlib.sha256(path.encode()).hexdigest()] = path
+        if isinstance(name, str):
+            found[name] = path
+    return found
+
+
+def _gemini_time(value):
+    if isinstance(value, (int, float)):
+        return _from_epoch(value, 1000)
+    return _parse_iso_ts(value) if isinstance(value, str) else None
+
+
+def _gemini_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("text"))
+    return ""
+
+
+def _gemini_chat(raw, json_lines):
+    """(session id, messages) of one chat file, keeping the last version of each message."""
+    if not json_lines:
+        data = json.loads(raw)
+        return data.get("sessionId"), [m for m in data.get("messages") or [] if isinstance(m, dict)]
+    sid, messages = None, {}
+    for line in raw.splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or "$set" in obj:
+            continue
+        if "type" not in obj:
+            sid = obj.get("sessionId", sid)
+        else:
+            messages[obj.get("id") or len(messages)] = obj  # a rewrite keeps the first position
+    return sid, list(messages.values())
+
+
+def _gemini_entries(messages):
+    """[(dt, type, role, text)] for a chat's messages."""
+    entries = []
+    for m in messages:
+        dt, mtype = _gemini_time(m.get("timestamp")), m.get("type")
+        text = _gemini_text(m.get("content"))
+        if mtype == "user":
+            if text:
+                entries.append((dt, "user", "user", text))
+        elif mtype == "gemini":
+            thoughts = [t for t in m.get("thoughts") or [] if isinstance(t, dict)]
+            if thoughts:
+                thought = "\n".join(": ".join(filter(None, (t.get("subject"), t.get("description")))) for t in thoughts)
+                entries.append((dt, "thinking", "assistant", thought))
+            if text:
+                entries.append((dt, "assistant", "assistant", text))
+            for call in m.get("toolCalls") or []:
+                if isinstance(call, dict):
+                    output = call.get("resultDisplay")
+                    entries.append((dt, "tool", "assistant", _tool_text(
+                        call.get("name", ""), call.get("args", ""), output if isinstance(output, str) else "",
+                    )))
+        elif text:  # info, warning and error notices
+            entries.append((dt, "tool", "tool", text))
+    return entries
+
+
+def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    since_ts = since.timestamp() if since else None
+    files = []
+    for path in (_gemini_dir() / "tmp").glob("*/chats/*.json*"):
+        if path.suffix not in (".json", ".jsonl"):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if since_ts is None or mtime >= since_ts:
+            files.append((mtime, path))
+    files.sort(reverse=newest_first)
+    regex, mentions = _compile_ci(pattern), _mentions(pattern)
+    for _, path in files:
+        project = _gemini_projects().get(path.parent.parent.name, "").replace("/", "-")
+        if project_filter and project_filter.lower() not in project.lower():
+            continue
+        try:
+            raw = path.read_bytes()
+            if not mentions(raw):
+                continue
+            sid, messages = _gemini_chat(raw.decode("utf-8", "replace"), path.suffix == ".jsonl")
+        except (OSError, ValueError, AttributeError):
+            continue
+        sid = sid if isinstance(sid, str) and sid else path.stem
+        if not _in_session(sid, session):
+            continue
+        hits = list(_entry_hits("gemini", project, sid, _gemini_entries(messages), regex))
+        yield from reversed(hits) if newest_first else hits
 
 
 # --- Antigravity CLI ---------------------------------------------------------
@@ -1052,6 +1195,8 @@ SOURCES = {
     "opencode": (opencode_hits, lambda: _opencode_db().exists(), "OpenCode"),
     "hermes": (hermes_hits, lambda: _hermes_db().exists(), "Hermes"),
     "antigravity": (antigravity_hits, lambda: (_antigravity_dir() / "brain").exists(), "Antigravity"),
+    "gemini": (gemini_hits, lambda: (_gemini_dir() / "tmp").exists(), "Gemini CLI"),
+    "zcode": (zcode_hits, lambda: _zcode_db().exists(), "Zcode"),
 }
 
 
