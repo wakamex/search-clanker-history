@@ -74,12 +74,13 @@ sch <pattern> [options]
 | `--file PATH` | Search a chat log instead of agent history (repeatable). See Chat logs below |
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
+| `-s`, `--session ID` | Only the session whose id starts with ID, such as the 8 characters a result header shows |
 | `-t`, `--type` | Filter by role: `user` or `assistant` |
 | `-A N` | Show N messages after each match. Tool messages count only with `--tools`, and reasoning only with `--thinking`, and with `-A` or `-B` the matching message is marked `>` |
 | `-B N` | Show N messages before each match |
 | `-C`, `--context` | Chars of text shown on each side of the match (default 200); `0` shows whole messages |
 | `-i`, `--ignore-case` | Accepted for grep users; matching is always case-insensitive |
-| `--since TIME` | Only messages at/after TIME (ISO 8601 or relative: `30m`, `2h`, `1d`, `1w`) |
+| `--since TIME` | Only messages at/after TIME (ISO 8601 or relative: `30m`, `2h`, `1d`, `1w`). A time without an offset is local time, the same clock result headers show |
 | `--until TIME` | Only messages at/before TIME (same formats as `--since`) |
 | `-n`, `--limit N` | Only the N most recent matches (printed oldest first). Scans newest files first and stops as soon as N are found |
 | `--tools` | Include tool_use/tool_result messages (hidden by default) |
@@ -126,7 +127,7 @@ Antigravity stores each step of a conversation as a [Protocol Buffers](https://p
 - A `.jsonl` file with one JSON object per line, holding `sent` (ISO 8601 time), `sender`, and `text`. Other keys are ignored.
 - Any other file, with one message per line as `YYYY-MM-DD HH:MM SENDER: TEXT`. Line breaks inside a message may be written as `⏎`, and a line without the date prefix continues the message before it.
 
-Each message is searched and printed as `SENDER: TEXT`, so `^NAME:` matches the messages of one sender. `-C`, `-A`, `-B`, `-n`, `--since`, and `--until` work as for agent history, and the header names the file and the message's line, for example `── 2026-03-01 09:00 | chat.txt:1 ──`. Times are shown in the file's own clock; times without an offset are read as local time.
+Each message is searched and printed as `SENDER: TEXT`, so `^NAME:` matches the messages of one sender. `-C`, `-A`, `-B`, `-n`, `--since`, and `--until` work as for agent history, and the header names the file and the message's line, for example `── 2026-03-01 09:00 | chat.txt:1 ──`. Times without an offset are read as local time.
 
 ```sh
 sch "^Ann Lee:.*deadline" --file chat.txt -B 1 -A 1

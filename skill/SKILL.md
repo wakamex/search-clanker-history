@@ -62,7 +62,8 @@ sch [OPTIONS] PATTERN
 - `-C CHARS` — Show CHARS of text on each side of the match (default 200); `-C 0` shows whole messages
 - `--file PATH` — Search a chat log instead of agent history: `.jsonl` with `sent`, `sender`, `text`, or `YYYY-MM-DD HH:MM SENDER: TEXT` lines. Messages read as `SENDER: TEXT`, so `^NAME:` picks a sender
 - `-n N` — Only the N most recent matches (fast; stops reading older history early)
-- `--since TIME` — Only messages at/after TIME (ISO 8601 like `2026-04-01`, or relative: `30m`, `2h`, `1d`, `1w`)
+- `--since TIME` — Only messages at/after TIME (ISO 8601 like `2026-04-01`, or relative: `30m`, `2h`, `1d`, `1w`); local time, the same clock result headers show
+- `-s ID` — Only one session, by any prefix of its id such as the 8 characters a result header shows. To read everything after a message: find it, then `sch . -s ID --since "HEADER TIME" -C 0`
 - `--until TIME` — Only messages at/before TIME (same formats as `--since`)
 - `--tools` — Include tool_use/tool_result messages (skipped by default)
 - `--thinking` — Include the agents' reasoning, shown as `[thinking]`, where it is stored as text (skipped by default; most Codex reasoning is encrypted)

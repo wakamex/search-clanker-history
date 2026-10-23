@@ -45,8 +45,8 @@ def agy_step(step_type, seconds, *content):
 
 
 class CliTests(unittest.TestCase):
-    def run_cli(self, *args, config_dir=None, home=None):
-        env = dict(os.environ, NO_COLOR="1")
+    def run_cli(self, *args, config_dir=None, home=None, tz="UTC"):
+        env = dict(os.environ, NO_COLOR="1", TZ=tz)
         for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR"):
             env.pop(name, None)
         if home is not None:
@@ -394,7 +394,7 @@ class CliTests(unittest.TestCase):
             ))
             for log in (text_log, json_log):
                 with self.subTest(log=log.name):
-                    sender = self.run_cli("search-clanker-history", "^Ann Lee:", "--file", str(log), home=temporary)
+                    sender = self.run_cli("search-clanker-history", "^Ann Lee:", "--file", str(log), home=temporary, tz="EST5")
                     self.assertEqual(sender.returncode, 0, sender.stderr)
                     self.assertIn("2 match(es)", sender.stdout)
                     self.assertIn(f"── 2026-03-01 09:00 | {log.name}:1 ──", sender.stdout)
@@ -414,6 +414,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(agent.returncode, 2)
         self.assertEqual(missing.returncode, 1)
         self.assertIn("no such file", missing.stderr)
+
+    def test_session_filter_and_local_time_headers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 3)
+            one = self.run_cli("search-clanker-history", "needle", "-s", "0123ABCD-0000-0000-0000-000000000001", config_dir=config_dir, home=temporary)
+            prefix = self.run_cli("search-clanker-history", "needle", "--session", "0123abcd", config_dir=config_dir, home=temporary)
+            toronto = self.run_cli("search-clanker-history", "needle in session 1", config_dir=config_dir, home=temporary, tz="EST5")
+
+        self.assertIn("1 match(es)", one.stdout)
+        self.assertIn("needle in session 1", one.stdout)
+        self.assertIn("3 match(es)", prefix.stdout)
+        self.assertIn("── 2026-01-01 19:00 | claude |", toronto.stdout)
 
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:

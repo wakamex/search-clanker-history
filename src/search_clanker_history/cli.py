@@ -63,6 +63,11 @@ def _visible(kind, extra):
     return kind not in _OPTIONAL_KINDS or kind in extra
 
 
+def _in_session(sid, session):
+    """Whether session id sid is the one --session names, by any prefix such as the 8 characters headers show."""
+    return session is None or (sid or "").lower().startswith(session.lower())
+
+
 _DIST_NAME = "search-clanker-history"
 
 
@@ -595,7 +600,7 @@ class Hit:
 
     @property
     def timestamp(self):
-        return self.dt.strftime("%Y-%m-%d %H:%M") if self.dt else ""
+        return self.dt.astimezone().strftime("%Y-%m-%d %H:%M") if self.dt else ""  # local time, as --since reads it
 
 
 # Lines read on each side of a match while looking for context messages, so a long run of
@@ -694,7 +699,7 @@ _BATCH_FILES_NEWEST_FIRST = 32
 
 def _jsonl_hits(
     source, roots, pattern, since, classify, session_info, project_filter, keep, newest_first, extra,
-    line_prefix=None,
+    line_prefix=None, session=None,
 ):
     """Yield hits oldest file first (lines ascending), or newest first with lines descending.
 
@@ -704,6 +709,8 @@ def _jsonl_hits(
     if project_filter:
         needle = project_filter.lower()
         files = [f for f in files if needle in session_info(f[1])[0].lower()]
+    if session:
+        files = [f for f in files if _in_session(session_info(f[1])[1], session)]
     if newest_first:
         files.reverse()
     size = _BATCH_FILES_NEWEST_FIRST if newest_first else _BATCH_FILES_UNBOUNDED
@@ -731,18 +738,19 @@ def _jsonl_hits(
             )
 
 
-def claude_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
+def claude_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _jsonl_hits(
         "claude", _claude_roots(), pattern, since, classify_line, parse_session_info,
-        project_filter, _keep_claude, newest_first, extra,
+        project_filter, _keep_claude, newest_first, extra, session=session,
     )
 
 
-def codex_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
+def codex_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _jsonl_hits(
         "codex", _codex_roots(), pattern, since, classify_codex_line, _codex_session_info,
         project_filter, _keep_codex, newest_first, extra,
         line_prefix=lambda extra: _CODEX_MESSAGE_OR_REASONING_PREFIX if "thinking" in extra else _CODEX_MESSAGE_PREFIX,
+        session=session,
     )
 
 
@@ -822,7 +830,7 @@ def _open_db(path):
     return conn
 
 
-def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_session, newest_first):
+def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_session, newest_first, session=None):
     """Shared driver: find candidate sessions, normalize each, yield matching entries.
 
     candidate_sql selects session ids whose raw rows match `?`, or is a function of the
@@ -841,6 +849,8 @@ def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_sessi
     hits = []
     with conn:
         for sid in sessions:
+            if not _in_session(sid, session):
+                continue
             project, entries = load_session(conn, sid)
             if project_filter and project_filter.lower() not in project.lower():
                 continue
@@ -908,10 +918,10 @@ def _opencode_load(conn, sid):
     return project, entries
 
 
-def opencode_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
+def opencode_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _db_hits(
         "opencode", _opencode_db(), pattern, project_filter,
-        "SELECT DISTINCT session_id FROM part WHERE data REGEXP ?", _opencode_load, newest_first,
+        "SELECT DISTINCT session_id FROM part WHERE data REGEXP ?", _opencode_load, newest_first, session,
     )
 
 
@@ -951,12 +961,12 @@ def _hermes_load(conn, sid):
     return project, entries
 
 
-def hermes_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
+def hermes_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _db_hits(
         "hermes", _hermes_db(), pattern, project_filter,
         lambda conn: "SELECT DISTINCT session_id FROM messages WHERE content REGEXP ? OR tool_calls REGEXP ?"
         + (f" OR {_hermes_reasoning_sql(conn)} REGEXP ?" if "thinking" in extra else ""),
-        _hermes_load, newest_first,
+        _hermes_load, newest_first, session,
     )
 
 
@@ -1084,11 +1094,13 @@ def _agy_project(conn):
 _REGEX_SPECIAL = frozenset(".^$*+?{}[]\\|()")
 
 
-def antigravity_hits(pattern, project_filter, since, newest_first=False, extra=frozenset()):
+def antigravity_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     root = _antigravity_dir()
     since_ts = since.timestamp() if since else None
     files = []
     for path in root.glob("*.db"):
+        if not _in_session(path.stem, session):
+            continue
         try:
             # The write-ahead log holds the newest steps, so it dates the conversation too.
             mtime = max(p.stat().st_mtime for p in (path, path.with_name(path.name + "-wal")) if p.exists())
@@ -1322,6 +1334,10 @@ def main():
     )
     parser.add_argument("-p", "--project", help="Filter to project (substring match on dir name)")
     parser.add_argument(
+        "-s", "--session", metavar="ID",
+        help="Only the session whose id starts with ID, such as the 8 characters a result header shows",
+    )
+    parser.add_argument(
         "-t", "--type",
         choices=["user", "assistant"],
         help="Filter by message role",
@@ -1372,8 +1388,8 @@ def main():
     if args.file:
         if args.agent:
             parser.error("--file searches only the named files and cannot be combined with --agent")
-        if args.type or args.tools or args.thinking:
-            parser.error("-t, --tools and --thinking apply to agent history; match a sender in a chat log with ^NAME:")
+        if args.type or args.tools or args.thinking or args.session:
+            parser.error("-t, -s, --tools and --thinking apply to agent history; match a sender in a chat log with ^NAME:")
         unreadable = [str(f) for f in args.file if not f.is_file()]
         if unreadable:
             print(f"Error: no such file: {', '.join(unreadable)}", file=sys.stderr)
@@ -1422,7 +1438,8 @@ def main():
             hits = sources[name](newest_first)
         else:
             hits = SOURCES[name][0](
-                args.pattern, args.project, args.since, newest_first=newest_first, extra=extra
+                args.pattern, args.project, args.since, newest_first=newest_first, extra=extra,
+                session=args.session,
             )
         return (h for h in hits if accepted(h))
 
