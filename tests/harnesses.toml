@@ -1,0 +1,96 @@
+# Where each coding-agent harness keeps its home and session history, and which tools read it.
+#
+# home: the harness's home directory. "${VAR:-default}" means the value of VAR when set, else default,
+#   as in the shell; "~" is the user's home directory.
+# sessions: where session history lives, relative to home.
+# readers: the tools on this host that read the history. Each reader's tests check its own path
+#   constants against this file. Check this file and those readers' code before deciding a harness's
+#   history cannot be read.
+
+[claude]
+name = "Claude Code"
+home = "${CLAUDE_CONFIG_DIR:-~/.claude}"
+sessions = ["projects/<project>/<session>.jsonl", "projects/<project>/<session>/subagents/agent-*.jsonl"]
+format = "JSON Lines, one message per line"
+readers = ["sch", "clanker-analytics", "wakterm"]
+
+[codex]
+name = "Codex"
+home = "${CODEX_HOME:-~/.codex}"
+sessions = ["sessions/YYYY/MM/DD/rollout-*.jsonl", "archived_sessions/rollout-*.jsonl"]
+format = "JSON Lines; reasoning is encrypted except for summaries some models write. Archiving a conversation moves its file from sessions/ to archived_sessions/."
+readers = ["sch", "clanker-analytics", "wakterm"]
+
+[agy]
+name = "Antigravity CLI (agy)"
+home = "~/.gemini/antigravity-cli"
+sessions = [
+  "brain/<id>/.system_generated/logs/transcript_full.jsonl",
+  "brain/<id>/.system_generated/logs/transcript.jsonl",
+  "conversations/<id>.db",
+]
+format = "JSON Lines with type, content, thinking, tool_calls and created_at. The model is not in the transcript; it is in conversations/<id>.db and cache/conversation_metadata.json. conversations/<id>.db holds the same steps as undocumented protobuf; prefer the transcript. Workspaces are in conversation_summaries.db (workspace_uris)."
+readers = ["sch", "clanker-analytics", "wakterm"]
+
+[gemini]
+name = "Gemini CLI"
+home = "${GEMINI_CLI_HOME:-~}/.gemini"
+sessions = ["tmp/<project>/chats/*.jsonl", "tmp/<project>/chats/*.json"]
+format = "Newer chats are JSON Lines: a metadata line, then messages, with $set lines for updates; a rewritten message is appended again with the same id, so keep the last version. Older chats are JSON, one file per chat, whose timestamp has more than one type. <project> is the name projects.json gives the project path, or the SHA-256 of the path in older homes."
+readers = ["sch", "clanker-analytics", "wakterm"]
+
+[opencode]
+name = "OpenCode"
+home = "${XDG_DATA_HOME:-~/.local/share}/opencode"
+sessions = ["opencode.db"]
+format = "SQLite: session, message and part tables with JSON data"
+readers = ["sch", "wakterm"]
+
+[zcode]
+name = "Zcode"
+home = "~/.zcode"
+sessions = ["cli/db/db.sqlite"]
+format = "SQLite in OpenCode's schema, with part, model_usage, turn_usage and tool_usage tables; read the write-ahead log too. The path is fixed: ZCODE_DATA_BASE_DIR moves only provider config and telemetry state."
+readers = ["sch", "clanker-analytics", "wakterm"]
+
+[hermes]
+name = "Hermes"
+home = "${HERMES_HOME:-~/.hermes}"
+sessions = ["state.db"]
+format = "SQLite: sessions and messages tables, with a reasoning column in newer databases; message ids are integers since 0.22"
+readers = ["sch"]
+
+[devin]
+name = "Devin CLI"
+home = "~/.local/share/devin/cli"
+sessions = ["sessions.db", "session_locks/<name>.lock"]
+format = "SQLite with sessions and message_nodes tables; one message spans several rows. A lock file marks a live session."
+readers = ["wakterm"]
+
+[grok]
+name = "Grok Build"
+home = "${GROK_HOME:-~/.grok}"
+sessions = ["sessions/<URL-encoded working directory>/<id>/chat_history.jsonl"]
+format = "JSON Lines; assistant and tool shapes unverified"
+readers = []
+
+[dsh]
+name = "DeepSeek Harness"
+home = "${DSH_HOME:-~/.dsh}"
+sessions = ["sessions/<project>/session-<id>/session.v3.jsonl.zstd"]
+format = "JSON Lines compressed with Zstandard"
+readers = []
+
+[cursor]
+name = "Cursor Agent"
+home = "~/.cursor"
+sessions = ["chats/<hash>/<id>/store.db"]
+format = "SQLite, one database per chat; content encoding not inspected"
+readers = []
+
+[antigravity-editor]
+name = "Antigravity editor"
+home = "~/.gemini/antigravity"
+sessions = ["conversations/*.pb"]
+format = "Protobuf, no decoder"
+readers = []
