@@ -1315,9 +1315,14 @@ def _dsh_load(path):
             for call in _dsh_blocks(message, "tool-call"):
                 entries.append((dt, "tool", "assistant", _tool_text(call.get("name", ""), call.get("arguments", ""))))
         elif etype == "tool/result":
-            for result in _dsh_blocks(data.get("message") or {}, "tool-result"):
+            # dsh 0.2.1 writes the output as text blocks; its repository's snapshot nests them in tool-result blocks.
+            message = data.get("message") or {}
+            texts = [b.get("text", "") for b in _dsh_blocks(message, "text")]
+            for result in _dsh_blocks(message, "tool-result"):
                 output = result.get("content")
-                text = _gemini_text(output) if isinstance(output, list) else json.dumps(output)
+                texts.append(_gemini_text(output) if isinstance(output, list) else json.dumps(output))
+            text = "\n".join(t for t in texts if t)
+            if text:
                 entries.append((dt, "tool", "tool", text))
     return sid, entries
 
