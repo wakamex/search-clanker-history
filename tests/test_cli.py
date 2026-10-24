@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -25,7 +26,7 @@ def record(role, text, timestamp):
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, config_dir=None, home=None, tz="UTC"):
         env = dict(os.environ, NO_COLOR="1", TZ=tz)
-        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME"):
+        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "GROK_HOME", "DSH_HOME"):
             env.pop(name, None)
         if home is not None:
             env["HOME"] = str(home)
@@ -306,6 +307,159 @@ class CliTests(unittest.TestCase):
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("| zcode | -code-demo | session:sess_zc1 ──", found.stdout)
         self.assertIn("[assistant] the wuzzle is fixed", found.stdout)
+
+    def test_grok_sessions_are_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / ".grok" / "sessions" / "%2Fcode%2Fdemo" / "01a15448-0000"
+            session.mkdir(parents=True)
+            (session / "summary.json").write_text(json.dumps({"created_at": "2026-01-02T03:04:05.123456789Z"}))
+            lines = [
+                {"type": "system", "content": "you are grok, blimpify everything"},
+                {"type": "user", "content": [{"type": "text", "text": "where is blimpify"}], "prompt_index": 0},
+                {"type": "user", "content": [{"type": "text", "text": "blimpify reminder"}], "synthetic_reason": "system_reminder"},
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "blimpify is probably in utils"}], "encrypted_content": "x"},
+                {"type": "assistant", "content": "blimpify is in utils",
+                 "tool_calls": [{"id": "c1", "name": "read_file", "arguments": "{\"target_file\": \"blimpify.py\"}"}]},
+                {"type": "tool_result", "tool_call_id": "c1", "content": "def blimpify(): pass"},
+            ]
+            (session / "chat_history.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+
+            plain = self.run_cli("search-clanker-history", "blimpify", "--agent", "grok", home=temporary)
+            everything = self.run_cli("search-clanker-history", "blimpify", "--agent", "grok", "--thinking", "--tools", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("── 2026-01-02 03:04 | grok | -code-demo | session:01a15448 ──", plain.stdout)
+        self.assertIn("[user] where is blimpify", plain.stdout)
+        self.assertIn("[assistant] blimpify is in utils", plain.stdout)
+        self.assertNotIn("reminder", plain.stdout)
+        self.assertNotIn("you are grok", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("[thinking] blimpify is probably in utils", everything.stdout)
+        self.assertIn("[read_file:", everything.stdout)
+        self.assertIn("[tool] def blimpify(): pass", everything.stdout)
+
+    def test_devin_messages_are_read_once_across_conversation_versions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            db_dir = Path(temporary) / ".local" / "share" / "devin" / "cli"
+            db_dir.mkdir(parents=True)
+            conn = sqlite3.connect(db_dir / "sessions.db")
+            conn.executescript(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT NOT NULL);"
+                "CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,"
+                " node_id INTEGER NOT NULL, parent_node_id INTEGER, chat_message TEXT NOT NULL, created_at INTEGER NOT NULL);"
+            )
+            conn.execute("INSERT INTO sessions VALUES ('tested-plantain', '/code/demo')")
+            messages = [
+                {"message_id": "s", "role": "system", "content": "frobulate system prompt", "metadata": {}},
+                {"message_id": "u", "role": "user", "content": "please frobulate", "metadata": {"is_user_input": True}},
+                {"message_id": "x", "role": "user", "content": "frobulate context", "metadata": {"is_user_input": False}},
+                {"message_id": "a", "role": "assistant", "content": "frobulated", "metadata": {},
+                 "thinking": {"thinking": "how to frobulate", "signature": "sig"},
+                 "tool_calls": [{"id": "t", "name": "exec", "arguments": "{\"command\": \"frobulate\"}"}]},
+                {"message_id": "r", "role": "tool", "content": "frobulate ok", "tool_call_id": "t", "metadata": {}},
+            ]
+            node = 0
+            for copy in range(2):  # a second version of the conversation repeats every message
+                for m in messages:
+                    conn.execute("INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES (?, ?, ?, ?)",
+                                 ("tested-plantain", node, json.dumps(m), 1767323045 + node))
+                    node += 1
+            conn.commit()
+            conn.close()
+
+            plain = self.run_cli("search-clanker-history", "frobulat", "--agent", "devin", home=temporary)
+            everything = self.run_cli("search-clanker-history", "frobulat", "--agent", "devin", "--thinking", "--tools", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("| devin | -code-demo | session:tested-p", plain.stdout)
+        self.assertIn("[user] please frobulate", plain.stdout)
+        self.assertIn("[assistant] frobulated", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("[thinking] how to frobulate", everything.stdout)
+        self.assertIn("[exec:", everything.stdout)
+        self.assertIn("[tool] frobulate ok", everything.stdout)
+        self.assertIn("5 match(es)", everything.stdout)
+
+    def test_dsh_sessions_are_searched_decompressed(self):
+        try:
+            from compression import zstd
+            compress = zstd.compress
+        except ImportError:
+            if not shutil.which("zstd"):
+                self.skipTest("needs Python 3.14 or the zstd command")
+            compress = lambda data: subprocess.run(["zstd", "-c"], input=data, capture_output=True, check=True).stdout  # noqa: E731
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / ".dsh" / "sessions" / "--code-demo--" / "session-89a80a14-0000"
+            session.mkdir(parents=True)
+            events = [
+                {"type": "session", "id": "session-89a80a14-0000", "cwd": "/code/demo", "createdAt": 1767323045000},
+                {"type": "user/message", "seq": 1, "time": 1767323045000,
+                 "data": {"role": "user", "content": [{"type": "text", "text": "find the zibble"}], "source": {"kind": "user"}}},
+                {"type": "user/message", "seq": 2, "time": 1767323045000,
+                 "data": {"role": "user", "content": [{"type": "text", "text": "zibble notice"}], "source": {"kind": "plugin"}}},
+                {"type": "assistant/chunk", "seq": 3, "time": 1767323046000,
+                 "data": {"turn": 1, "step": 1, "chunk": {"type": "text-delta", "text": "zibble partial"}}},
+                {"type": "assistant/message", "seq": 4, "time": 1767323046000, "data": {"turn": 1, "step": 1, "message": {
+                    "role": "assistant", "content": [
+                        {"type": "reasoning", "text": "the zibble may be in utils"},
+                        {"type": "text", "text": "the zibble is in utils"},
+                        {"type": "tool-call", "id": "c1", "name": "grep", "arguments": "{\"pattern\": \"zibble\"}"},
+                    ]}}},
+                {"type": "tool/result", "seq": 5, "time": 1767323047000, "data": {"turn": 1, "step": 1, "message": {
+                    "role": "user", "content": [{"type": "tool-result", "toolCallId": "c1", "content": [{"type": "text", "text": "utils.py: zibble"}]}]}}},
+            ]
+            (session / "session.v4.jsonl.zstd").write_bytes(compress("".join(json.dumps(e) + "\n" for e in events).encode()))
+
+            plain = self.run_cli("search-clanker-history", "zibble", "--agent", "dsh", home=temporary)
+            everything = self.run_cli("search-clanker-history", "zibble", "--agent", "dsh", "--thinking", "--tools", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("── 2026-01-02 03:04 | dsh | -code-demo | session:89a80a14 ──", plain.stdout)
+        self.assertIn("[user] find the zibble", plain.stdout)
+        self.assertIn("[assistant] the zibble is in utils", plain.stdout)
+        self.assertNotIn("notice", plain.stdout)
+        self.assertNotIn("partial", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("[thinking] the zibble may be in utils", everything.stdout)
+        self.assertIn("[tool] utils.py: zibble", everything.stdout)
+        self.assertIn("5 match(es)", everything.stdout)
+
+    def test_cursor_chats_are_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            chat = Path(temporary) / ".cursor" / "chats" / hashlib.md5(b"/code/demo").hexdigest() / "78e751b3-0000"
+            chat.mkdir(parents=True)
+            conn = sqlite3.connect(chat / "store.db")
+            conn.executescript("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
+            conn.execute("INSERT INTO meta VALUES ('0', ?)", (json.dumps({"createdAt": 1767323045000}).encode().hex(),))
+            blobs = [
+                {"role": "system", "content": "cursor system prompt about quaxle"},
+                {"role": "user", "content": "<user_info>\nOS Version: linux\nWorkspace Path: /code/demo\n</user_info> quaxle"},
+                {"role": "user", "content": [{"type": "text", "text": "where is the quaxle"}]},
+                {"role": "assistant", "id": "a", "content": [
+                    {"type": "redacted-reasoning", "data": "secret"},
+                    {"type": "text", "text": "the quaxle is in utils"},
+                    {"type": "tool-call", "toolCallId": "c1", "toolName": "Grep", "args": {"pattern": "quaxle"}},
+                ]},
+                {"role": "tool", "id": "t", "content": [{"type": "tool-result", "toolCallId": "c1", "toolName": "Grep", "result": "utils.py: quaxle"}]},
+            ]
+            conn.execute("INSERT INTO blobs VALUES ('tree', ?)", (b"\n\x12binary tree record",))
+            for n, blob in enumerate(blobs):
+                conn.execute("INSERT INTO blobs VALUES (?, ?)", (f"b{n}", json.dumps(blob).encode()))
+            conn.commit()
+            conn.close()
+
+            plain = self.run_cli("search-clanker-history", "quaxle", "--agent", "cursor", "-p", "demo", home=temporary)
+            tools = self.run_cli("search-clanker-history", "quaxle", "--agent", "cursor", "--tools", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("── 2026-01-02 03:04 | cursor | -code-demo | session:78e751b3 ──", plain.stdout)
+        self.assertIn("[user] where is the quaxle", plain.stdout)
+        self.assertIn("[assistant] the quaxle is in utils", plain.stdout)
+        self.assertNotIn("user_info", plain.stdout)
+        self.assertNotIn("system prompt", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("[Grep:", tools.stdout)
+        self.assertIn("[tool] utils.py: quaxle", tools.stdout)
 
     def test_hermes_database_is_searched(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -64,29 +64,33 @@ readers = ["sch"]
 name = "Devin CLI"
 home = "~/.local/share/devin/cli"
 sessions = ["sessions.db", "session_locks/<name>.lock"]
-format = "SQLite with sessions and message_nodes tables; one message spans several rows. A lock file marks a live session."
-readers = ["wakterm"]
+format = "SQLite with sessions and message_nodes tables. message_nodes is a tree of conversation versions: a resumed or retried turn copies earlier messages into new nodes with the same message_id, so dedupe by message_id. thinking is an object {thinking, signature}. User messages with metadata.is_user_input false are injected context. A lock file marks a live session."
+readers = ["sch", "wakterm"]
 
 [grok]
 name = "Grok Build"
 home = "${GROK_HOME:-~/.grok}"
-sessions = ["sessions/<URL-encoded working directory>/<id>/chat_history.jsonl"]
-format = "JSON Lines; assistant and tool shapes unverified"
-readers = []
+sessions = [
+  "sessions/<URL-encoded working directory>/<id>/chat_history.jsonl",
+  "sessions/<URL-encoded working directory>/<id>/summary.json",
+  "sessions/<URL-encoded working directory>/<id>/events.jsonl",
+]
+format = "JSON Lines without timestamps; summary.json has the session's created_at and events.jsonl has ts per turn event. User lines with synthetic_reason are injected reminders. Reasoning lines carry a readable summary next to encrypted_content."
+readers = ["sch"]
 
 [dsh]
 name = "DeepSeek Harness"
 home = "${DSH_HOME:-~/.dsh}"
-sessions = ["sessions/<project>/session-<id>/session.v3.jsonl.zstd"]
-format = "JSON Lines compressed with Zstandard"
-readers = []
+sessions = ["sessions/-<cwd with / as ->-/session-<id>/session.v<N>.jsonl.zstd"]
+format = "JSON Lines compressed with Zstandard; the format version N varies (v3 and v4 seen). Records are events with type, time (ms) and data. user/message (source.kind user for prompts, other kinds are injected context), assistant/message (content blocks: reasoning, text, tool-call) and tool/result hold the conversation; assistant/chunk is the raw stream."
+readers = ["sch"]
 
 [cursor]
 name = "Cursor Agent"
 home = "~/.cursor"
-sessions = ["chats/<hash>/<id>/store.db"]
-format = "SQLite, one database per chat; content encoding not inspected"
-readers = []
+sessions = ["chats/<MD5 of workspace path>/<id>/store.db"]
+format = "SQLite, one database per chat, with blobs (id, data) and meta tables. Messages are JSON blobs with role and content, beside binary tree records, in insertion order with no per-message time. meta key '0' is hex-encoded JSON with createdAt (ms). The first string user message names the workspace in a <user_info> block. Reasoning is stored redacted and cannot be read."
+readers = ["sch"]
 
 [antigravity-editor]
 name = "Antigravity editor"

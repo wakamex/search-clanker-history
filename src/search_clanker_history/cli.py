@@ -26,6 +26,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -58,6 +59,22 @@ def _zcode_db():
 
 def _gemini_dir():
     return _env_path("GEMINI_CLI_HOME", Path.home()) / ".gemini"
+
+
+def _grok_dir():
+    return _env_path("GROK_HOME", Path.home() / ".grok")
+
+
+def _dsh_dir():
+    return _env_path("DSH_HOME", Path.home() / ".dsh")
+
+
+def _devin_db():
+    return Path.home() / ".local" / "share" / "devin" / "cli" / "sessions.db"
+
+
+def _cursor_dir():
+    return Path.home() / ".cursor"
 
 
 def _antigravity_dir():
@@ -1100,15 +1117,18 @@ def _gemini_project(path):
     return _gemini_projects().get(path.parent.parent.name, "").replace("/", "-")
 
 
-def _files_mentioning(pattern, paths):
-    """The paths whose raw bytes the pattern can match: rg's file list, or a scan in Python without rg."""
+def _files_mentioning(pattern, paths, zipped=False):
+    """The paths whose raw bytes the pattern can match: rg's file list, or a scan in Python without rg.
+
+    `zipped` files are compressed; rg searches them decompressed, and without rg every one is kept.
+    """
     rg = _find_rg()
     if rg and paths:
         try:
             re.compile(pattern)
-            flags = []
+            flags = ["-z"] if zipped else []
         except re.error:
-            flags = ["-F"]
+            flags = ["-F", "-z"] if zipped else ["-F"]
         found = set()
         for i in range(0, len(paths), 1000):  # stay under the argument length limit
             out = subprocess.run(
@@ -1120,6 +1140,8 @@ def _files_mentioning(pattern, paths):
             found.update(Path(os.fsdecode(line)) for line in out.stdout.splitlines())
         else:
             return found
+    if zipped:
+        return set(paths)
     mentions = _mentions(pattern)
     found = set()
     for path in paths:
@@ -1131,12 +1153,34 @@ def _files_mentioning(pattern, paths):
     return found
 
 
+def _gemini_load(path):
+    sid, messages = _gemini_chat(path.read_text(encoding="utf-8", errors="replace"), path.suffix == ".jsonl")
+    return (sid if isinstance(sid, str) and sid else path.stem), _gemini_entries(messages)
+
+
 def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    paths = [p for p in (_gemini_dir() / "tmp").glob("*/chats/*.json*") if p.suffix in (".json", ".jsonl")]
+    yield from _session_file_hits(
+        "gemini", paths, pattern, project_filter, since, newest_first, session, _gemini_project, _gemini_load,
+    )
+
+
+# --- Agents that keep one file per session (Gemini CLI, Grok Build, DeepSeek Harness, Cursor) ----------
+
+
+def _session_file_hits(
+    source, paths, pattern, project_filter, since, newest_first, session, project_of, load,
+    zipped=False, prefilter=True,
+):
+    """Hits from session files: load(path) returns (session id, [(dt, type, role, text)]).
+
+    Files modified before `since` are skipped, and with `prefilter` only files whose raw bytes the
+    pattern can match are loaded (`zipped` files are searched decompressed). A callable `prefilter(path,
+    mentions)` replaces that check, for files whose raw bytes split a message.
+    """
     since_ts = since.timestamp() if since else None
     files = []
-    for path in (_gemini_dir() / "tmp").glob("*/chats/*.json*"):
-        if path.suffix not in (".json", ".jsonl"):
-            continue
+    for path in paths:
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -1145,23 +1189,278 @@ def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozen
             files.append((mtime, path))
     files.sort(reverse=newest_first)
     if project_filter:
-        files = [f for f in files if project_filter(_gemini_project(f[1]))]
+        files = [f for f in files if project_filter(project_of(f[1]))]
     regex = _compile_ci(pattern)
-    candidates = _files_mentioning(pattern, [path for _, path in files])
+    if callable(prefilter):
+        mentions = _mentions(pattern)
+        candidates = {p for _, p in files if prefilter(p, mentions)}
+    else:
+        candidates = _files_mentioning(pattern, [p for _, p in files], zipped)
     for _, path in files:
         if path not in candidates:
             continue
-        project = _gemini_project(path)
         try:
-            raw = path.read_bytes()
-            sid, messages = _gemini_chat(raw.decode("utf-8", "replace"), path.suffix == ".jsonl")
-        except (OSError, ValueError, AttributeError):
+            sid, entries = load(path)
+        except (OSError, ValueError, AttributeError, sqlite3.Error):
             continue
-        sid = sid if isinstance(sid, str) and sid else path.stem
         if not _in_session(sid, session):
             continue
-        hits = list(_entry_hits("gemini", project, sid, _gemini_entries(messages), regex))
+        hits = list(_entry_hits(source, project_of(path), sid, entries, regex))
         yield from reversed(hits) if newest_first else hits
+
+
+# --- Grok Build ----------------------------------------------------------------
+
+# Grok writes sessions/<URL-encoded working directory>/<id>/chat_history.jsonl, one message per line
+# with no time; summary.json beside it has the session's created_at, which every message takes.
+
+
+def _grok_project(path):
+    return urllib.parse.unquote(path.parent.parent.name).replace("/", "-")
+
+
+def _grok_load(path):
+    try:
+        started = _parse_iso_ts(json.loads((path.parent / "summary.json").read_text()).get("created_at") or "")
+    except (OSError, ValueError, AttributeError):
+        started = None
+    dt = started or _from_epoch(path.stat().st_mtime)
+    entries = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(m, dict):
+            continue
+        mtype, content = m.get("type"), m.get("content")
+        if mtype == "user" and not m.get("synthetic_reason"):  # synthetic messages are injected reminders
+            text = _gemini_text(content)
+            if text:
+                entries.append((dt, "user", "user", text))
+        elif mtype == "assistant":
+            if isinstance(content, str) and content:
+                entries.append((dt, "assistant", "assistant", content))
+            for call in m.get("tool_calls") or []:
+                if isinstance(call, dict):
+                    entries.append((dt, "tool", "assistant", _tool_text(call.get("name", ""), call.get("arguments", ""))))
+        elif mtype == "reasoning":
+            text = _gemini_text(m.get("summary"))
+            if text:
+                entries.append((dt, "thinking", "assistant", text))
+        elif mtype == "tool_result" and isinstance(content, str) and content:
+            entries.append((dt, "tool", "tool", content))
+    return path.parent.name, entries
+
+
+def grok_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    yield from _session_file_hits(
+        "grok", list((_grok_dir() / "sessions").glob("*/*/chat_history.jsonl")), pattern, project_filter,
+        since, newest_first, session, _grok_project, _grok_load,
+    )
+
+
+# --- DeepSeek Harness ------------------------------------------------------------
+
+# dsh writes sessions/<project>/session-<id>/session.v<N>.jsonl.zstd: Zstandard-compressed JSON Lines of
+# events with a type, a time in milliseconds and data. user/message, assistant/message and tool/result
+# hold the conversation; assistant/chunk events are the raw stream the assembled messages came from.
+
+
+def _zstd_decompress(path):
+    try:
+        from compression import zstd  # Python 3.14
+    except ImportError:
+        if not shutil.which("zstd"):
+            raise OSError("reading DeepSeek Harness sessions needs Python 3.14 or the zstd command")
+        return subprocess.run(["zstd", "-dc", "--", str(path)], capture_output=True, check=True).stdout
+    return zstd.decompress(path.read_bytes())
+
+
+def _dsh_project(path):
+    # The directory is the working directory with / replaced by -, padded with - on both sides.
+    return "-" + path.parent.parent.name.strip("-")
+
+
+def _dsh_blocks(message, kind):
+    return [b for b in message.get("content") or [] if isinstance(b, dict) and b.get("type") == kind]
+
+
+def _dsh_load(path):
+    try:
+        raw = _zstd_decompress(path)
+    except subprocess.CalledProcessError as e:
+        raise OSError(f"cannot decompress {path}") from e
+    sid, entries = path.parent.name.removeprefix("session-"), []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        etype, data, dt = event.get("type"), event.get("data") or {}, _from_epoch(event.get("time"), 1000)
+        if etype == "session":
+            sid = str(event.get("id") or sid).removeprefix("session-")
+        elif etype == "user/message" and (data.get("source") or {}).get("kind") == "user":  # other kinds are injected context
+            text = "\n".join(b.get("text", "") for b in _dsh_blocks(data, "text"))
+            if text:
+                entries.append((dt, "user", "user", text))
+        elif etype == "assistant/message":
+            message = data.get("message") or {}
+            for kind, block_type in (("thinking", "reasoning"), ("assistant", "text")):
+                text = "\n".join(b.get("text", "") for b in _dsh_blocks(message, block_type))
+                if text:
+                    entries.append((dt, kind, "assistant", text))
+            for call in _dsh_blocks(message, "tool-call"):
+                entries.append((dt, "tool", "assistant", _tool_text(call.get("name", ""), call.get("arguments", ""))))
+        elif etype == "tool/result":
+            for result in _dsh_blocks(data.get("message") or {}, "tool-result"):
+                output = result.get("content")
+                text = _gemini_text(output) if isinstance(output, list) else json.dumps(output)
+                entries.append((dt, "tool", "tool", text))
+    return sid, entries
+
+
+def dsh_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    yield from _session_file_hits(
+        "dsh", list((_dsh_dir() / "sessions").glob("*/session-*/session.v*.jsonl.zstd")), pattern,
+        project_filter, since, newest_first, session, _dsh_project, _dsh_load, zipped=True,
+    )
+
+
+# --- Cursor Agent ----------------------------------------------------------------
+
+# Cursor keeps each chat in chats/<MD5 of the workspace path>/<id>/store.db. Its blobs table holds
+# the messages as JSON objects with a role and content, in insertion order, beside binary tree records;
+# meta row 0 is hex-encoded JSON with the chat's createdAt, which every message takes. The first
+# message names the workspace in a <user_info> block. Cursor stores reasoning redacted.
+_CURSOR_WORKSPACE = re.compile(r"^Workspace Path: (.+)$", re.M)
+
+
+def _cursor_messages(path):
+    conn = _open_db(path)
+    with conn:
+        meta = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
+        rows = conn.execute("SELECT data FROM blobs ORDER BY rowid").fetchall()
+    conn.close()
+    try:
+        created = json.loads(bytes.fromhex(meta[0])).get("createdAt") if meta else None
+    except (ValueError, TypeError, AttributeError):
+        created = None
+    messages = []
+    for (data,) in rows:
+        try:
+            m = json.loads(data)
+        except (ValueError, TypeError):
+            continue  # binary tree records
+        if isinstance(m, dict) and "role" in m:
+            messages.append(m)
+    return _from_epoch(created, 1000), messages
+
+
+@functools.lru_cache(maxsize=None)
+def _cursor_project(path):
+    try:
+        _, messages = _cursor_messages(path)
+    except sqlite3.Error:
+        return ""
+    for m in messages:
+        found = _CURSOR_WORKSPACE.search(m["content"]) if isinstance(m.get("content"), str) else None
+        if found:
+            return found.group(1).strip().replace("/", "-")
+    return ""
+
+
+def _cursor_load(path):
+    dt, messages = _cursor_messages(path)
+    entries = []
+    for m in messages:
+        role, content = m.get("role"), m.get("content")
+        if role == "user" and isinstance(content, list):  # a string user message is the injected <user_info>
+            text = _gemini_text(content)
+            if text:
+                entries.append((dt, "user", "user", text))
+        elif role == "assistant" and isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and part.get("text"):
+                    entries.append((dt, "assistant", "assistant", part["text"]))
+                elif part.get("type") == "tool-call":
+                    entries.append((dt, "tool", "assistant", _tool_text(part.get("toolName", ""), part.get("args", ""))))
+        elif role == "tool" and isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "tool-result":
+                    result = part.get("result")
+                    entries.append((dt, "tool", "tool", result if isinstance(result, str) else json.dumps(result)))
+    return path.parent.name, entries
+
+
+def _cursor_mentions(path, mentions):
+    """Whether any blob can match: a database page splits long blobs, so the raw file cannot be searched."""
+    try:
+        conn = _open_db(path)
+        with conn:
+            found = any(mentions(data) for (data,) in conn.execute("SELECT data FROM blobs") if isinstance(data, bytes))
+        conn.close()
+        return found
+    except sqlite3.Error:
+        return False
+
+
+def cursor_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    yield from _session_file_hits(
+        "cursor", list((_cursor_dir() / "chats").glob("*/*/store.db")), pattern, project_filter, since,
+        newest_first, session, _cursor_project, _cursor_load, prefilter=_cursor_mentions,
+    )
+
+
+# --- Devin CLI -------------------------------------------------------------------
+
+# Devin keeps sessions.db with a sessions table and message_nodes, a tree of every version of the
+# conversation: a retried or resumed turn copies earlier messages into new nodes with the same
+# message_id, so each message is read once.
+
+
+def _devin_load(conn, sid):
+    row = conn.execute("SELECT working_directory FROM sessions WHERE id = ?", (sid,)).fetchone()
+    project = (row[0] or "").replace("/", "-") if row else ""
+    entries, seen = [], set()
+    rows = conn.execute(
+        "SELECT chat_message, created_at FROM message_nodes WHERE session_id = ? ORDER BY created_at, node_id", (sid,),
+    )
+    for raw, created in rows:
+        try:
+            m = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(m, dict) or m.get("message_id") in seen:
+            continue
+        seen.add(m.get("message_id"))
+        dt, role, content = _from_epoch(created), m.get("role"), m.get("content")
+        is_input = (m.get("metadata") or {}).get("is_user_input")
+        if role == "user" and is_input and content:  # other user messages are injected context
+            entries.append((dt, "user", "user", content))
+        elif role == "assistant":
+            thinking = (m.get("thinking") or {}).get("thinking") if isinstance(m.get("thinking"), dict) else None
+            if thinking:
+                entries.append((dt, "thinking", "assistant", thinking))
+            if content:
+                entries.append((dt, "assistant", "assistant", content))
+            for call in m.get("tool_calls") or []:
+                if isinstance(call, dict):
+                    entries.append((dt, "tool", "assistant", _tool_text(call.get("name", ""), call.get("arguments", ""))))
+        elif role == "tool" and content:
+            entries.append((dt, "tool", "tool", content))
+    return project, entries
+
+
+def devin_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    yield from _db_hits(
+        "devin", _devin_db(), pattern, project_filter,
+        "SELECT DISTINCT session_id FROM message_nodes WHERE chat_message REGEXP ?", _devin_load, newest_first, session,
+    )
 
 
 # --- Antigravity CLI ---------------------------------------------------------
@@ -1240,6 +1539,10 @@ SOURCES = {
     "antigravity": (antigravity_hits, lambda: (_antigravity_dir() / "brain").exists(), "Antigravity"),
     "gemini": (gemini_hits, lambda: (_gemini_dir() / "tmp").exists(), "Gemini CLI"),
     "zcode": (zcode_hits, lambda: _zcode_db().exists(), "Zcode"),
+    "grok": (grok_hits, lambda: (_grok_dir() / "sessions").exists(), "Grok Build"),
+    "devin": (devin_hits, lambda: _devin_db().exists(), "Devin CLI"),
+    "dsh": (dsh_hits, lambda: (_dsh_dir() / "sessions").exists(), "DeepSeek Harness"),
+    "cursor": (cursor_hits, lambda: (_cursor_dir() / "chats").exists(), "Cursor Agent"),
 }
 
 

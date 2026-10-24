@@ -9,6 +9,10 @@ Search across your coding-agent session history for keywords or patterns. It cov
 - [Antigravity CLI](https://antigravity.google/) (`agy`)
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 - Zcode
+- [Grok Build](https://github.com/xai-org/grok-build)
+- [Devin CLI](https://docs.devin.ai/cli/index)
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`)
+- [Cursor Agent](https://docs.cursor.com/en/cli/overview)
 
 In the examples, `sch` stands for the command, `search-clanker-history` (see Packages and commands below for a one-line alias).
 
@@ -72,7 +76,7 @@ sch <pattern> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, `hermes`, `antigravity`, `gemini`, or `zcode`. Repeat the flag to search several. Overrides the default agents for this search |
+| `--agent AGENT` | Search one agent's history: `claude`, `codex`, `opencode`, `hermes`, `antigravity`, `gemini`, `zcode`, `grok`, `devin`, `dsh`, or `cursor`. Repeat the flag to search several. Overrides the default agents for this search |
 | `--file PATH` | Search a chat log instead of agent history (repeatable). See Chat logs below |
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
@@ -119,10 +123,16 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 | Antigravity CLI | `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`, one transcript per conversation | none | Workspace from `conversation_summaries.db`, with `/` replaced by `-` |
 | Gemini CLI | `~/.gemini/tmp/<project>/chats/*.json` and `*.jsonl`, one file per chat | `GEMINI_CLI_HOME` (replaces `~`) | Project path from `~/.gemini/projects.json`, with `/` replaced by `-` |
 | Zcode | `~/.zcode/cli/db/db.sqlite` (SQLite, OpenCode's schema) | none | Session directory, with `/` replaced by `-` |
+| Grok Build | `~/.grok/sessions/<working directory>/<id>/chat_history.jsonl` | `GROK_HOME` | Session working directory, with `/` replaced by `-` |
+| Devin CLI | `~/.local/share/devin/cli/sessions.db` (SQLite) | none | Session working directory, with `/` replaced by `-` |
+| DeepSeek Harness | `~/.dsh/sessions/<project>/session-<id>/session.v<N>.jsonl.zstd`, compressed with [Zstandard](https://facebook.github.io/zstd/) | `DSH_HOME` | Session working directory, with `/` replaced by `-` |
+| Cursor Agent | `~/.cursor/chats/<hash>/<id>/store.db`, one SQLite database per chat | none | Workspace named in the chat's first message, with `/` replaced by `-` |
 
 Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given, and reasoning unless `--thinking` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
 
 Databases are opened read-only.
+
+Grok Build and Cursor record no time for each message, so every message takes its session's start time, and `--since`, `--until`, and `--after` work per session for them. DeepSeek Harness sessions need Python 3.14 or the `zstd` command to decompress. Devin keeps every version of a conversation, so a message repeated in a later version is shown once. Cursor stores reasoning redacted, so `--thinking` finds none there.
 
 Reasoning is searchable only where the history keeps it as text. Claude Code thinking blocks are text unless the model returned them redacted. Codex stores reasoning encrypted and keeps a readable summary only for some models, so most Codex reasoning cannot be searched. OpenCode and Zcode reasoning parts, the Hermes `reasoning` column, Antigravity thoughts, and Gemini CLI thoughts are text.
 

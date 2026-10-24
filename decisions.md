@@ -4,7 +4,7 @@ Goal: make the tool (written `sch` here, an alias for `search-clanker-history`) 
 
 ## Result
 
-The tool now searches Claude Code, Codex, OpenCode, Hermes, the Antigravity CLI, Gemini CLI, and Zcode. `--agent` limits a search to one or more of them; without it, every agent that has history on the machine is searched. Each result header names the agent.
+The tool now searches Claude Code, Codex, OpenCode, Hermes, the Antigravity CLI, Gemini CLI, Zcode, Grok Build, Devin CLI, DeepSeek Harness, and Cursor Agent. `--agent` limits a search to one or more of them; without it, every agent that has history on the machine is searched. Each result header names the agent.
 
 ## Coverage by harness
 
@@ -14,13 +14,13 @@ The tool now searches Claude Code, Codex, OpenCode, Hermes, the Antigravity CLI,
 | Codex | Added | JSONL rollout files under `sessions/` and `archived_sessions/`; 300+ sessions on this host exercise the parser |
 | OpenCode | Added | SQLite `opencode.db` with `session`, `message`, and `part` tables; text and tool parts are searched |
 | Hermes | Added | SQLite `state.db` with `sessions` and `messages` tables |
-| Grok Build | Deferred | `~/.grok/sessions/<URL-encoded working directory>/<id>/chat_history.jsonl`; the assistant and tool shapes are unverified |
-| Devin CLI | Deferred | `~/.local/share/devin/cli/sessions.db` has `sessions` and `message_nodes` tables with real sessions to verify an adapter against |
-| Cursor Agent | Deferred | Chats are `store.db` files; the content encoding was not inspected |
+| Grok Build | Added | `${GROK_HOME:-~/.grok}/sessions/<URL-encoded working directory>/<id>/chat_history.jsonl`. Lines carry no time, so each message takes the session's `created_at` from `summary.json`. User lines with a `synthetic_reason` are injected reminders and are skipped |
+| Devin CLI | Added | `~/.local/share/devin/cli/sessions.db`: `message_nodes` is a tree of conversation versions in which a retried or resumed turn copies earlier messages, so each `message_id` is read once. User messages that are not `is_user_input` are injected context and are skipped |
+| Cursor Agent | Added | `~/.cursor/chats/<MD5 of the workspace path>/<id>/store.db`: messages are JSON blobs with a role and content, read in insertion order, beside binary tree records. Each message takes the chat's `createdAt` from the hex-encoded JSON in `meta`. The workspace is read from the first message's `<user_info>` block, which is then skipped. Reasoning is stored redacted. Blobs are checked for the pattern before they are parsed, since a database page can split a long blob |
 | Zcode | Added | `~/.zcode/cli/db/db.sqlite` uses OpenCode's `session`, `message`, and `part` tables, so the OpenCode reader serves it. Zcode's code has no variable that moves this path |
 | Antigravity | Added for the CLI (`agy`) | `agy` writes each conversation as JSON Lines in `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`, with named fields for the step type, content, thinking, and tool calls, so it shares the JSONL search engine with Claude Code and Codex. The workspace comes from `conversation_summaries.db`. The per-conversation SQLite databases in `conversations/` hold the same steps as undocumented protobuf and are not read. The older Antigravity editor's `.pb` conversation files are not read either |
 | Gemini CLI | Added | Chats under `${GEMINI_CLI_HOME:-~}/.gemini/tmp/<project>/chats/`: older ones are one JSON document, newer ones JSON Lines that rewrite a message by appending it again with the same id, so the last version of each message is searched. Thoughts are read as reasoning and tool calls with their displayed result as tool entries. The project directory is named in `projects.json`, or is the SHA-256 of the project path in older homes |
-| DeepSeek Harness | Deferred | Sessions are Zstandard-compressed JSON Lines under `~/.dsh/sessions/<project>/session-<id>/session.v3.jsonl.zstd` |
+| DeepSeek Harness | Added | `${DSH_HOME:-~/.dsh}/sessions/<project>/session-<id>/session.v<N>.jsonl.zstd`, decompressed with Python 3.14's `compression.zstd` or the `zstd` command. `user/message` events from the user, `assistant/message`, and `tool/result` are read; raw `assistant/chunk` events are skipped. The two sessions here end before a reply, so replies and tool results follow the snapshot in DeepSeek Harness's own tests |
 
 Deferred harnesses can be added as one adapter each once a real session with assistant replies is available to test against.
 

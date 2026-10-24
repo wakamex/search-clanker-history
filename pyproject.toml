@@ -5,9 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "search-clanker-history"
 version = "0.2.1"
-description = "Search across Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI and Zcode session history"
+description = "Search across Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI, Zcode, Grok Build, Devin CLI, DeepSeek Harness and Cursor session history"
 readme = "README.md"
-keywords = ["claude-code", "codex", "opencode", "hermes", "antigravity", "gemini-cli", "zcode", "session-history", "search", "ai-agents", "cli"]
+keywords = ["claude-code", "codex", "opencode", "hermes", "antigravity", "gemini-cli", "zcode", "grok", "devin", "deepseek-harness", "cursor", "session-history", "search", "ai-agents", "cli"]
 requires-python = ">=3.10"
 license = "MIT"
 

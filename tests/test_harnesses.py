@@ -20,7 +20,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESSES = Path(__file__).with_name("harnesses.toml")
-HARNESSES_COMMIT = "df319ed"
+HARNESSES_COMMIT = "3c3f159"
 
 spec = importlib.util.spec_from_file_location("sch_cli", ROOT / "src" / "search_clanker_history" / "cli.py")
 cli = importlib.util.module_from_spec(spec)
@@ -36,6 +36,10 @@ ENTRIES = {
     "antigravity": "agy",
     "gemini": "gemini",
     "zcode": "zcode",
+    "grok": "grok",
+    "devin": "devin",
+    "dsh": "dsh",
+    "cursor": "cursor",
 }
 
 # The paths each agent's reader opens: a directory it walks, or a file pattern it reads.
@@ -47,6 +51,10 @@ READ_PATHS = {
     "antigravity": lambda: [cli._antigravity_dir() / "brain/<id>/.system_generated/logs" / cli._AGY_TRANSCRIPT],
     "gemini": lambda: [cli._gemini_dir() / "tmp"],
     "zcode": lambda: [cli._zcode_db()],
+    "grok": lambda: [cli._grok_dir() / "sessions"],
+    "devin": lambda: [cli._devin_db()],
+    "dsh": lambda: [cli._dsh_dir() / "sessions"],
+    "cursor": lambda: [cli._cursor_dir() / "chats"],
 }
 
 
@@ -57,10 +65,11 @@ SKIPPED = {
         "brain/<id>/.system_generated/logs/transcript.jsonl",  # a subset of transcript_full.jsonl
         "conversations/<id>.db",  # the same steps as undocumented protobuf
     },
+    "devin": {"session_locks/<name>.lock"},  # marks a live session; holds no messages
 }
 
 # Every variable the spec sheet names as moving a home that sch reads.
-HOME_VARIABLES = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_DATA_HOME", "HERMES_HOME", "GEMINI_CLI_HOME")
+HOME_VARIABLES = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_DATA_HOME", "HERMES_HOME", "GEMINI_CLI_HOME", "GROK_HOME", "DSH_HOME")
 
 
 def expand_home(home, env):

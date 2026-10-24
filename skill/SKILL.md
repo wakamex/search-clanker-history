@@ -1,17 +1,17 @@
 ---
 name: search-history
-description: Search Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI and Zcode conversation history with regex patterns and context. Use this skill whenever the user references past work ("a few days ago", "last week", "previously"), asks about prior conversations, wants to find when something was discussed, needs to recall specific commands/decisions/errors from earlier sessions, or mentions timing without specifics. Also use when investigating issues that may have been discussed before, or when the user asks "did we try X?" or "what was that thing we did?".
+description: Search Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI, Zcode, Grok Build, Devin CLI, DeepSeek Harness and Cursor conversation history with regex patterns and context. Use this skill whenever the user references past work ("a few days ago", "last week", "previously"), asks about prior conversations, wants to find when something was discussed, needs to recall specific commands/decisions/errors from earlier sessions, or mentions timing without specifics. Also use when investigating issues that may have been discussed before, or when the user asks "did we try X?" or "what was that thing we did?".
 ---
 
 # Search Conversation History
 
-Search across all Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI and Zcode conversation history to find past discussions, commands, decisions, and context.
+Search across all Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI, Zcode, Grok Build, Devin CLI, DeepSeek Harness and Cursor conversation history to find past discussions, commands, decisions, and context.
 
 **Keywords**: history, past conversations, previous sessions, last week, few days ago, earlier, before, recall, find when, search logs, conversation search
 
 ## Overview
 
-The `sch` command searches through the session history of every supported agent (Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI, Zcode) on the machine using regex patterns. It's essential for maintaining context across sessions when users reference work from hours, days, or weeks ago.
+The `sch` command searches through the session history of every supported agent (Claude Code, Codex, OpenCode, Hermes, Antigravity, Gemini CLI, Zcode, Grok Build, Devin CLI, DeepSeek Harness, Cursor) on the machine using regex patterns. It's essential for maintaining context across sessions when users reference work from hours, days, or weeks ago.
 
 Use this proactively when:
 - User mentions timeframes without specifics ("last time", "earlier", "before")
@@ -54,7 +54,7 @@ sch [OPTIONS] PATTERN
 
 ### Key Options
 
-- `--agent AGENT` — Limit to `claude`, `codex`, `opencode`, `hermes`, `antigravity`, `gemini`, or `zcode` (repeatable; default: all with history)
+- `--agent AGENT` — Limit to `claude`, `codex`, `opencode`, `hermes`, `antigravity`, `gemini`, `zcode`, `grok`, `devin`, `dsh`, or `cursor` (repeatable; default: all with history)
 - `-p PROJECT` — Filter to project (substring match on directory name)
 - `-t {user,assistant}` — Filter by message role
 - `-A N` — Show N messages after match
