@@ -1096,6 +1096,41 @@ def _gemini_entries(messages):
     return entries
 
 
+def _gemini_project(path):
+    return _gemini_projects().get(path.parent.parent.name, "").replace("/", "-")
+
+
+def _files_mentioning(pattern, paths):
+    """The paths whose raw bytes the pattern can match: rg's file list, or a scan in Python without rg."""
+    rg = _find_rg()
+    if rg and paths:
+        try:
+            re.compile(pattern)
+            flags = []
+        except re.error:
+            flags = ["-F"]
+        found = set()
+        for i in range(0, len(paths), 1000):  # stay under the argument length limit
+            out = subprocess.run(
+                [rg, "-l", "-i", "--no-messages", *flags, "-e", pattern, "--", *map(str, paths[i:i + 1000])],
+                capture_output=True,
+            )
+            if out.returncode == 2 and not out.stdout:
+                break  # a pattern only Python's re accepts; scan in Python instead
+            found.update(Path(os.fsdecode(line)) for line in out.stdout.splitlines())
+        else:
+            return found
+    mentions = _mentions(pattern)
+    found = set()
+    for path in paths:
+        try:
+            if mentions(path.read_bytes()):
+                found.add(path)
+        except OSError:
+            pass
+    return found
+
+
 def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     since_ts = since.timestamp() if since else None
     files = []
@@ -1109,15 +1144,16 @@ def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozen
         if since_ts is None or mtime >= since_ts:
             files.append((mtime, path))
     files.sort(reverse=newest_first)
-    regex, mentions = _compile_ci(pattern), _mentions(pattern)
+    if project_filter:
+        files = [f for f in files if project_filter(_gemini_project(f[1]))]
+    regex = _compile_ci(pattern)
+    candidates = _files_mentioning(pattern, [path for _, path in files])
     for _, path in files:
-        project = _gemini_projects().get(path.parent.parent.name, "").replace("/", "-")
-        if project_filter and not project_filter(project):
+        if path not in candidates:
             continue
+        project = _gemini_project(path)
         try:
             raw = path.read_bytes()
-            if not mentions(raw):
-                continue
             sid, messages = _gemini_chat(raw.decode("utf-8", "replace"), path.suffix == ".jsonl")
         except (OSError, ValueError, AttributeError):
             continue
