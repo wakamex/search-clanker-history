@@ -509,6 +509,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(hit["text"]), len("filler before 0 ") + 200_000)
         self.assertEqual(hit["after"], [{"kind": "user", "role": "user", "text": "needle in session 0"}])
 
+    def test_exclude_project_leaves_out_matching_projects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            for project in ("-code-demo", "-tmp-scratch-run"):
+                (config_dir / "projects" / project).mkdir(parents=True)
+                (config_dir / "projects" / project / "0123abcd-0000-0000-0000-000000000000.jsonl").write_text(
+                    json.dumps(record("user", f"meat in {project}", "2026-01-02T00:00:00Z")) + "\n"
+                )
+            found = self.run_cli("search-clanker-history", "meat", "-P", "TMP-", config_dir=config_dir, home=temporary)
+            both = self.run_cli("search-clanker-history", "meat", "-p", "code", "-P", "demo", config_dir=config_dir, home=temporary)
+
+        self.assertIn("meat in -code-demo", found.stdout)
+        self.assertNotIn("scratch", found.stdout)
+        self.assertIn("No matches found.", both.stdout)
+
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)

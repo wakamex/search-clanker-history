@@ -76,6 +76,7 @@ sch <pattern> [options]
 | `--file PATH` | Search a chat log instead of agent history (repeatable). See Chat logs below |
 | `--default-agents [AGENT ...]` | Show or save the agents searched by default (see Packages) |
 | `-p`, `--project` | Filter to a project (substring match on dir name) |
+| `-P`, `--exclude-project TEXT` | Leave out projects whose name contains TEXT, ignoring case (repeatable), such as `-P nvme-claude-tmp` for scratch directories |
 | `-s`, `--session ID` | Only the session whose id starts with ID, such as the 8 characters a result header shows |
 | `-t`, `--type` | Filter by role: `user` or `assistant` |
 | `-A N` | Show N messages after each match. Tool messages count only with `--tools`, and reasoning only with `--thinking`, and with `-A` or `-B` the matching message is marked `>` |

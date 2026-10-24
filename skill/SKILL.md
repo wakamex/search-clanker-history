@@ -63,6 +63,7 @@ sch [OPTIONS] PATTERN
 - `--file PATH` — Search a chat log instead of agent history: `.jsonl` with `sent`, `sender`, `text`, or `YYYY-MM-DD HH:MM SENDER: TEXT` lines. Messages read as `SENDER: TEXT`, so `^NAME:` picks a sender
 - `-n N` — Only the N most recent matches (fast; stops reading older history early)
 - `--since TIME` — Only messages at/after TIME (ISO 8601 like `2026-04-01`, or relative: `30m`, `2h`, `1d`, `1w`); local time, the same clock result headers show
+- `-P TEXT` — Leave out projects whose name contains TEXT (repeatable), for example scratch directories that crowd out real results
 - `-s ID` — Only one session, by any prefix of its id such as the 8 characters a result header shows. To read everything after a message, use `--after`
 - `--until TIME` — Only messages at/before TIME (same formats as `--since`)
 - `--after PATTERN` — Start at the most recent message matching PATTERN and show everything from it on; the search pattern can be left out. Narrow the starting message with `-p`, `-s`, `--since`, `--until`

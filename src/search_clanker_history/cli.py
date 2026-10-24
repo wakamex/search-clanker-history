@@ -72,6 +72,14 @@ def _visible(kind, extra):
     return kind not in _OPTIONAL_KINDS or kind in extra
 
 
+def _project_filter(include, exclude):
+    """A test of a project name: it contains include and none of exclude, ignoring case; None if both are empty."""
+    if not include and not exclude:
+        return None
+    include, exclude = (include or "").lower(), [e.lower() for e in exclude or []]
+    return lambda project: include in project.lower() and not any(e in project.lower() for e in exclude)
+
+
 def _in_session(sid, session):
     """Whether session id sid is the one --session names, by any prefix such as the 8 characters headers show."""
     return session is None or (sid or "").lower().startswith(session.lower())
@@ -721,8 +729,7 @@ def _jsonl_hits(
     files = _list_files(roots, since, file_name)
     regex = _compile_ci(pattern)
     if project_filter:
-        needle = project_filter.lower()
-        files = [f for f in files if needle in session_info(f[1])[0].lower()]
+        files = [f for f in files if project_filter(session_info(f[1])[0])]
     if session:
         files = [f for f in files if _in_session(session_info(f[1])[1], session)]
     if newest_first:
@@ -816,7 +823,7 @@ def _chat_messages(path):
 
 def file_hits(path, pattern, project_filter, newest_first=False):
     """Hits from one chat log. The sender is part of the searched text, as `SENDER: TEXT`."""
-    if project_filter and project_filter.lower() not in path.name.lower():
+    if project_filter and not project_filter(path.name):
         return
     regex = _compile_ci(pattern)
     entries = [(n, dt, f"{sender}: {text}") for n, dt, sender, text in _chat_messages(path)]
@@ -869,7 +876,7 @@ def _db_hits(source, db_path, pattern, project_filter, candidate_sql, load_sessi
             if not _in_session(sid, session):
                 continue
             project, entries = load_session(conn, sid)
-            if project_filter and project_filter.lower() not in project.lower():
+            if project_filter and not project_filter(project):
                 continue
             hits.extend(_entry_hits(source, project, sid, entries, regex))
     hits.sort(key=lambda h: h.dt or _EPOCH, reverse=newest_first)
@@ -1105,7 +1112,7 @@ def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozen
     regex, mentions = _compile_ci(pattern), _mentions(pattern)
     for _, path in files:
         project = _gemini_projects().get(path.parent.parent.name, "").replace("/", "-")
-        if project_filter and project_filter.lower() not in project.lower():
+        if project_filter and not project_filter(project):
             continue
         try:
             raw = path.read_bytes()
@@ -1397,6 +1404,10 @@ def _main():
     )
     parser.add_argument("-p", "--project", help="Filter to project (substring match on dir name)")
     parser.add_argument(
+        "-P", "--exclude-project", action="append", metavar="TEXT",
+        help="Leave out projects whose name contains TEXT (repeatable)",
+    )
+    parser.add_argument(
         "-s", "--session", metavar="ID",
         help="Only the session whose id starts with ID, such as the 8 characters a result header shows",
     )
@@ -1468,8 +1479,9 @@ def _main():
         if unreadable:
             print(f"Error: no such file: {', '.join(unreadable)}", file=sys.stderr)
             sys.exit(1)
+    projects = _project_filter(args.project, args.exclude_project)
     sources = {
-        str(f): lambda pattern, newest_first, f=f: file_hits(f, pattern, args.project, newest_first)
+        str(f): lambda pattern, newest_first, f=f: file_hits(f, pattern, projects, newest_first)
         for f in dict.fromkeys(args.file or [])
     }
 
@@ -1510,7 +1522,7 @@ def _main():
         if name in sources:
             return sources[name](pattern, newest_first)
         return SOURCES[name][0](
-            pattern, args.project, args.since, newest_first=newest_first, extra=extra, session=args.session,
+            pattern, projects, args.since, newest_first=newest_first, extra=extra, session=args.session,
         )
 
     def stream(name, newest_first):
