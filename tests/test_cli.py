@@ -461,6 +461,47 @@ class CliTests(unittest.TestCase):
         self.assertIn("[Grep:", tools.stdout)
         self.assertIn("[tool] utils.py: quaxle", tools.stdout)
 
+    def test_muse_sessions_are_searched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / ".local" / "share" / "muse" / "sessions" / "2026" / "01" / "02" / "01a1739f-0000"
+            session.mkdir(parents=True)
+            at = 1767323045_000_000
+
+            def run_event(n, event):
+                return {"payload_type": "runtime.session", "recorded_at": at + n, "payload": {"kind": "run", "event": event}}
+
+            records = [
+                {"payload_type": "runtime.session.metadata", "recorded_at": at,
+                 "payload": {"kind": "metadata", "record": {"workspace_root": "/code/demo"}}},
+                {"payload_type": "runtime.user_intent.accepted", "recorded_at": at, "payload": {
+                    "semantic_kind": {"kind": "chat"}, "model_messages": [{"content": [{"kind": "text", "text": "where is the plonk"}]}]}},
+                {"payload_type": "runtime.user_intent.accepted", "recorded_at": at, "payload": {
+                    "semantic_kind": {"kind": "reminder"}, "model_messages": [{"content": [{"kind": "text", "text": "plonk reminder"}]}]}},
+                run_event(1, {"kind": "reasoning_committed", "text": "", "encrypted_content": "x"}),
+                run_event(2, {"kind": "reasoning_summary_committed", "text": "the plonk may be in utils"}),
+                run_event(3, {"kind": "assistant_tool_calls_committed", "tool_calls": [{"name": "bash", "args": "{\"command\": \"grep plonk\"}"}]}),
+                run_event(4, {"kind": "tool_result_batch_committed", "results": [{"text": "utils.py: plonk", "tool_call_id": "c"}]}),
+                run_event(5, {"kind": "assistant_message_committed", "text": "the plonk is in utils"}),
+                run_event(6, {"kind": "model_completed", "usage": {"input_tokens": 1}, "model": "plonk-model"}),
+            ]
+            (session / "session.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+            (session / "subagent" / "x").mkdir(parents=True)
+            (session / "subagent" / "x" / "session.jsonl").write_text(json.dumps(run_event(7, {"kind": "assistant_message_committed", "text": "subagent plonk"})) + "\n")
+
+            plain = self.run_cli("search-clanker-history", "plonk", "--agent", "muse", "-p", "demo", home=temporary)
+            everything = self.run_cli("search-clanker-history", "plonk", "--agent", "muse", "--thinking", "--tools", home=temporary)
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("── 2026-01-02 03:04 | muse | -code-demo | session:01a1739f ──", plain.stdout)
+        self.assertIn("[user] where is the plonk", plain.stdout)
+        self.assertIn("[assistant] the plonk is in utils", plain.stdout)
+        self.assertNotIn("reminder", plain.stdout)
+        self.assertNotIn("subagent", plain.stdout)
+        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("[thinking] the plonk may be in utils", everything.stdout)
+        self.assertIn("[tool] utils.py: plonk", everything.stdout)
+        self.assertIn("5 match(es)", everything.stdout)
+
     def test_hermes_database_is_searched(self):
         with tempfile.TemporaryDirectory() as temporary:
             hermes = Path(temporary) / ".hermes"

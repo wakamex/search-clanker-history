@@ -82,7 +82,7 @@ readers = ["sch"]
 name = "DeepSeek Harness"
 home = "${DSH_HOME:-~/.dsh}"
 sessions = ["sessions/-<cwd with / as ->-/session-<id>/session.v<N>.jsonl.zstd"]
-format = "JSON Lines compressed with Zstandard; the format version N varies (v3 and v4 seen). Records are events with type, time (ms) and data. user/message (source.kind user for prompts, other kinds are injected context), assistant/message (content blocks: reasoning, text, tool-call) and tool/result hold the conversation; assistant/chunk is the raw stream."
+format = "JSON Lines compressed with Zstandard; the format version N varies (v3 and v4 seen). Records are events with type, time (ms) and data. user/message (source.kind user for prompts, other kinds are injected context), assistant/message (content blocks: reasoning, text, tool-call) and tool/result hold the conversation; tool/result keeps a tool's output either as plain text blocks in data.message.content ({type: text, text}, as dsh 0.2.1-rc.2 writes) or nested in tool-result blocks, so accept both. Reasoning blocks have empty text unless the model's config sets reasoningEffort, which the headless profile's default does not, so a session with no readable reasoning usually has empty blocks rather than a missing field. assistant/chunk is the raw stream."
 readers = ["sch"]
 
 [cursor]
@@ -91,6 +91,17 @@ home = "~/.cursor"
 sessions = ["chats/<MD5 of workspace path>/<id>/store.db"]
 format = "SQLite, one database per chat, with blobs (id, data) and meta tables. Messages are JSON blobs with role and content, beside binary tree records, in insertion order with no per-message time. meta key '0' is hex-encoded JSON with createdAt (ms). The first string user message names the workspace in a <user_info> block. Reasoning is stored redacted and cannot be read."
 readers = ["sch"]
+
+[muse]
+name = "Muse Code"
+home = "${XDG_DATA_HOME:-~/.local/share}/muse"
+sessions = [
+  "sessions/YYYY/MM/DD/<session id>/session.jsonl",
+  "sessions/YYYY/MM/DD/<session id>/subagent/<id>/session.jsonl",
+  "session-index.db",
+]
+format = "JSON Lines of records with payload_type, stream {kind, id}, recorded_at (microseconds) and payload; session ids are UUIDv7. Most of a turn is payload_type runtime.session with payload.kind run and payload.event.kind naming the step: model_completed carries usage (input_tokens, cached_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens) and model, assistant_message_committed holds replies, assistant_tool_calls_committed tool calls (tool_calls name and args) and tool_result_batch_committed their results (results[].text). reasoning_committed keeps only encrypted_content with empty text; the readable reasoning is in reasoning_summary_committed. The user's prompt is runtime.user_intent.accepted with semantic_kind chat (model_messages), and the workspace is workspace_root in runtime.session.metadata. Settings and the login are under ${XDG_CONFIG_HOME:-~/.config}/muse. Checked against 1.4.12."
+readers = ["sch", "clanker-analytics"]
 
 [antigravity-editor]
 name = "Antigravity editor"

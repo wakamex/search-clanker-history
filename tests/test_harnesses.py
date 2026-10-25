@@ -20,7 +20,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESSES = Path(__file__).with_name("harnesses.toml")
-HARNESSES_COMMIT = "3c3f159"
+HARNESSES_COMMIT = "12d508f"
 
 spec = importlib.util.spec_from_file_location("sch_cli", ROOT / "src" / "search_clanker_history" / "cli.py")
 cli = importlib.util.module_from_spec(spec)
@@ -40,6 +40,7 @@ ENTRIES = {
     "devin": "devin",
     "dsh": "dsh",
     "cursor": "cursor",
+    "muse": "muse",
 }
 
 # The paths each agent's reader opens: a directory it walks, or a file pattern it reads.
@@ -55,6 +56,7 @@ READ_PATHS = {
     "devin": lambda: [cli._devin_db()],
     "dsh": lambda: [cli._dsh_dir() / "sessions"],
     "cursor": lambda: [cli._cursor_dir() / "chats"],
+    "muse": lambda: [cli._muse_dir() / "sessions"],
 }
 
 
@@ -66,6 +68,10 @@ SKIPPED = {
         "conversations/<id>.db",  # the same steps as undocumented protobuf
     },
     "devin": {"session_locks/<name>.lock"},  # marks a live session; holds no messages
+    "muse": {
+        "sessions/YYYY/MM/DD/<session id>/subagent/<id>/session.jsonl",  # subagent runs repeat their parent's work
+        "session-index.db",  # a search index of the session files
+    },
 }
 
 # Every variable the spec sheet names as moving a home that sch reads.

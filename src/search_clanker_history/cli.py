@@ -77,6 +77,10 @@ def _cursor_dir():
     return Path.home() / ".cursor"
 
 
+def _muse_dir():
+    return _env_path("XDG_DATA_HOME", Path.home() / ".local" / "share") / "muse"
+
+
 def _antigravity_dir():
     return Path.home() / ".gemini" / "antigravity-cli"
 
@@ -1421,6 +1425,73 @@ def cursor_hits(pattern, project_filter, since, newest_first=False, extra=frozen
     )
 
 
+# --- Muse Code -------------------------------------------------------------------
+
+# Muse writes sessions/YYYY/MM/DD/<session id>/session.jsonl, records with a payload_type, recorded_at in
+# microseconds, and a payload. The prompt is runtime.user_intent.accepted (semantic kind chat); the rest
+# of the conversation is runtime.session run events named by payload.event.kind. The workspace is in
+# runtime.session.metadata. Subagent sessions under <session id>/subagent/ are not read.
+_MUSE_THINKING = ("reasoning_committed", "reasoning_summary_committed")
+
+
+def _muse_records(path):
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and isinstance(record.get("payload"), dict):
+            yield record
+
+
+@functools.lru_cache(maxsize=None)
+def _muse_project(path):
+    try:
+        for record in _muse_records(path):
+            if record.get("payload_type") == "runtime.session.metadata":
+                root = (record["payload"].get("record") or {}).get("workspace_root")
+                if isinstance(root, str):
+                    return root.replace("/", "-")
+    except OSError:
+        pass
+    return ""
+
+
+def _muse_load(path):
+    entries = []
+    for record in _muse_records(path):
+        payload, dt = record["payload"], _from_epoch(record.get("recorded_at"), 1_000_000)
+        if record.get("payload_type") == "runtime.user_intent.accepted":
+            if (payload.get("semantic_kind") or {}).get("kind") == "chat":
+                parts = [c for m in payload.get("model_messages") or [] for c in m.get("content") or []]
+                text = "\n".join(c.get("text", "") for c in parts if isinstance(c, dict) and c.get("kind") == "text")
+                if text:
+                    entries.append((dt, "user", "user", text))
+            continue
+        event = payload.get("event") if record.get("payload_type") == "runtime.session" else None
+        kind = event.get("kind") if isinstance(event, dict) else None
+        if kind == "assistant_message_committed" and event.get("text"):
+            entries.append((dt, "assistant", "assistant", event["text"]))
+        elif kind in _MUSE_THINKING and event.get("text"):
+            entries.append((dt, "thinking", "assistant", event["text"]))
+        elif kind == "assistant_tool_calls_committed":
+            for call in event.get("tool_calls") or []:
+                if isinstance(call, dict):
+                    entries.append((dt, "tool", "assistant", _tool_text(call.get("name", ""), call.get("args", ""))))
+        elif kind == "tool_result_batch_committed":
+            for result in event.get("results") or []:
+                if isinstance(result, dict) and result.get("text"):
+                    entries.append((dt, "tool", "tool", result["text"]))
+    return path.parent.name, entries
+
+
+def muse_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
+    yield from _session_file_hits(
+        "muse", list((_muse_dir() / "sessions").glob("*/*/*/*/session.jsonl")), pattern, project_filter,
+        since, newest_first, session, _muse_project, _muse_load,
+    )
+
+
 # --- Devin CLI -------------------------------------------------------------------
 
 # Devin keeps sessions.db with a sessions table and message_nodes, a tree of every version of the
@@ -1548,6 +1619,7 @@ SOURCES = {
     "devin": (devin_hits, lambda: _devin_db().exists(), "Devin CLI"),
     "dsh": (dsh_hits, lambda: (_dsh_dir() / "sessions").exists(), "DeepSeek Harness"),
     "cursor": (cursor_hits, lambda: (_cursor_dir() / "chats").exists(), "Cursor Agent"),
+    "muse": (muse_hits, lambda: (_muse_dir() / "sessions").exists(), "Muse Code"),
 }
 
 
