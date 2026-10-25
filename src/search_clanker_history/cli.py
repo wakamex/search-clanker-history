@@ -385,9 +385,11 @@ def _list_files(roots, since=None, name=None):
 
 
 def _mmap_extract_lines(mm, size, match_positions):
-    """Given (start, end) byte positions in an mmap, return (line_offset, line_bytes) for each."""
-    results = []
+    """(line_offset, line_bytes) for each line holding one of the ascending (start, end) positions, once."""
+    results, line_end = [], -1
     for start, end in match_positions:
+        if start <= line_end:
+            continue  # another match on a line already taken
         line_start = mm.rfind(b"\n", 0, start) + 1
         line_end = mm.find(b"\n", end)
         if line_end == -1:
@@ -450,7 +452,13 @@ def _search_file_re(args):
                 return matches
             f.seek(0)
             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                positions = [(m.start(), m.end()) for m in regex_b.finditer(mm)]
+                positions, pos = [], 0
+                while (m := regex_b.search(mm, pos)) is not None:
+                    positions.append((m.start(), m.end()))
+                    line_end = mm.find(b"\n", m.end())
+                    if line_end == -1:
+                        break
+                    pos = line_end + 1  # one match per line is enough to keep it
                 for offset, line in _mmap_extract_lines(mm, size, positions):
                     matches.append((fpath, offset, line))
     except OSError:
@@ -484,9 +492,14 @@ def _scan_python(pattern, paths):
         for w in work:
             yield from worker_fn(w)
     else:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+        # A caller that stops early, such as -n or --after, closes this generator; the files not yet
+        # searched are then dropped instead of searched for nobody.
+        pool = concurrent.futures.ProcessPoolExecutor(max_workers=workers)
+        try:
             for file_matches in pool.map(worker_fn, work, chunksize=4):
                 yield from file_matches
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _find_rg():
@@ -1946,10 +1959,11 @@ def _main():
 
     if args.after:
         # The starting message obeys every filter except -t, so a reply can follow a user message.
-        starts = [
-            next((h for h in search(name, args.after, True) if _visible(h.kind, extra) and in_window(h) and h.dt), None)
-            for name in names
-        ]
+        starts = []
+        for name in names:
+            found = search(name, args.after, True)
+            starts.append(next((h for h in found if _visible(h.kind, extra) and in_window(h) and h.dt), None))
+            found.close()  # stop its scan now instead of when the generator is collected
         start = max((h for h in starts if h), key=lambda h: h.dt, default=None)
         if start is None:
             print(f"Error: no message matches --after {args.after!r}", file=sys.stderr)

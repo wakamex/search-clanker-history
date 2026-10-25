@@ -719,6 +719,19 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("scratch", found.stdout)
         self.assertIn("No matches found.", both.stdout)
 
+    def test_python_scanner_keeps_each_matching_line_once(self):
+        # rg rejects the lookahead, so the Python scanner runs; the pattern matches at almost every
+        # byte of a 200 KB line, which once meant a copy of the line per match.
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            self.write_sessions(config_dir, 1)
+            env = dict(os.environ, NO_COLOR="1", HOME=temporary, CLAUDE_CONFIG_DIR=temporary)
+            found = subprocess.run(["search-clanker-history", "x(?=x)", "--agent", "claude"], env=env,
+                                   capture_output=True, text=True, timeout=60, check=False)
+
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("1 match(es)", found.stdout)
+
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)
