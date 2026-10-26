@@ -26,7 +26,7 @@ def record(role, text, timestamp):
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, config_dir=None, home=None, tz="UTC"):
         env = dict(os.environ, NO_COLOR="1", TZ=tz)
-        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "GROK_HOME", "DSH_HOME"):
+        for name in ("CODEX_HOME", "HERMES_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "GROK_HOME", "DSH_HOME", "DEVIN_SESSIONS_DIR"):
             env.pop(name, None)
         if home is not None:
             env["HOME"] = str(home)
@@ -369,6 +369,14 @@ class CliTests(unittest.TestCase):
 
             plain = self.run_cli("search-clanker-history", "frobulat", "--agent", "devin", home=temporary)
             everything = self.run_cli("search-clanker-history", "frobulat", "--agent", "devin", "--thinking", "--tools", home=temporary)
+            moved = Path(temporary) / "moved"
+            (moved / "devin" / "cli").mkdir(parents=True)
+            (db_dir / "sessions.db").rename(moved / "devin" / "cli" / "sessions.db")
+            env = dict(os.environ, NO_COLOR="1", HOME=temporary)
+            by_xdg = subprocess.run(["search-clanker-history", "frobulat", "--agent", "devin"],
+                                    env=dict(env, XDG_DATA_HOME=str(moved)), capture_output=True, text=True, check=False)
+            by_sessions_dir = subprocess.run(["search-clanker-history", "frobulat", "--agent", "devin"],
+                                             env=dict(env, DEVIN_SESSIONS_DIR=str(moved / "devin")), capture_output=True, text=True, check=False)
 
         self.assertEqual(plain.returncode, 0, plain.stderr)
         self.assertIn("| devin | -code-demo | session:tested-p", plain.stdout)
@@ -379,6 +387,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("[exec:", everything.stdout)
         self.assertIn("[tool] frobulate ok", everything.stdout)
         self.assertIn("5 match(es)", everything.stdout)
+        self.assertIn("2 match(es)", by_xdg.stdout, by_xdg.stderr)
+        self.assertIn("2 match(es)", by_sessions_dir.stdout, by_sessions_dir.stderr)
 
     def test_dsh_sessions_are_searched_decompressed(self):
         try:

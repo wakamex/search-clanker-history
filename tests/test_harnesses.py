@@ -20,7 +20,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESSES = Path(__file__).with_name("harnesses.toml")
-HARNESSES_COMMIT = "12d508f"
+HARNESSES_COMMIT = "55725a0"
 
 spec = importlib.util.spec_from_file_location("sch_cli", ROOT / "src" / "search_clanker_history" / "cli.py")
 cli = importlib.util.module_from_spec(spec)

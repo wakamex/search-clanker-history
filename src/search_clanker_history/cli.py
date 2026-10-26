@@ -70,7 +70,9 @@ def _dsh_dir():
 
 
 def _devin_db():
-    return Path.home() / ".local" / "share" / "devin" / "cli" / "sessions.db"
+    # DEVIN_SESSIONS_DIR moves only the session database; XDG_DATA_HOME moves all of Devin's data.
+    root = os.environ.get("DEVIN_SESSIONS_DIR") or _env_path("XDG_DATA_HOME", Path.home() / ".local" / "share") / "devin"
+    return Path(root) / "cli" / "sessions.db"
 
 
 def _cursor_dir():

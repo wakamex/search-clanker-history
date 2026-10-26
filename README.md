@@ -125,7 +125,7 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 | Gemini CLI | `~/.gemini/tmp/<project>/chats/*.json` and `*.jsonl`, one file per chat | `GEMINI_CLI_HOME` (replaces `~`) | Project path from `~/.gemini/projects.json`, with `/` replaced by `-` |
 | Zcode | `~/.zcode/cli/db/db.sqlite` (SQLite, OpenCode's schema) | none | Session directory, with `/` replaced by `-` |
 | Grok Build | `~/.grok/sessions/<working directory>/<id>/chat_history.jsonl` | `GROK_HOME` | Session working directory, with `/` replaced by `-` |
-| Devin CLI | `~/.local/share/devin/cli/sessions.db` (SQLite) | none | Session working directory, with `/` replaced by `-` |
+| Devin CLI | `~/.local/share/devin/cli/sessions.db` (SQLite) | `XDG_DATA_HOME`, or `DEVIN_SESSIONS_DIR` for the database alone | Session working directory, with `/` replaced by `-` |
 | DeepSeek Harness | `~/.dsh/sessions/<project>/session-<id>/session.v<N>.jsonl.zstd`, compressed with [Zstandard](https://facebook.github.io/zstd/) | `DSH_HOME` | Session working directory, with `/` replaced by `-` |
 | Cursor Agent | `~/.cursor/chats/<hash>/<id>/store.db`, one SQLite database per chat | none | Workspace named in the chat's first message, with `/` replaced by `-` |
 | Muse Code | `~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl` | `XDG_DATA_HOME` | Session workspace root, with `/` replaced by `-` |

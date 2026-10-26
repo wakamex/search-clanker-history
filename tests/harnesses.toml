@@ -62,9 +62,9 @@ readers = ["sch"]
 
 [devin]
 name = "Devin CLI"
-home = "~/.local/share/devin/cli"
+home = "${XDG_DATA_HOME:-~/.local/share}/devin/cli"
 sessions = ["sessions.db", "session_locks/<name>.lock"]
-format = "SQLite with sessions and message_nodes tables. message_nodes is a tree of conversation versions: a resumed or retried turn copies earlier messages into new nodes with the same message_id, so dedupe by message_id. thinking is an object {thinking, signature}. User messages with metadata.is_user_input false are injected context. A lock file marks a live session."
+format = "SQLite with sessions and message_nodes tables. message_nodes is a tree of conversation versions: a resumed or retried turn copies earlier messages into new nodes with the same message_id, so dedupe by message_id. thinking is an object {thinking, signature}. User messages with metadata.is_user_input false are injected context. A lock file marks a live session. DEVIN_SESSIONS_DIR=S moves only sessions.db and session_locks/, to S/cli/; logs and credentials stay in the home."
 readers = ["sch", "wakterm"]
 
 [grok]
@@ -101,7 +101,7 @@ sessions = [
   "session-index.db",
 ]
 format = "JSON Lines of records with payload_type, stream {kind, id}, recorded_at (microseconds) and payload; session ids are UUIDv7. Most of a turn is payload_type runtime.session with payload.kind run and payload.event.kind naming the step: model_completed carries usage (input_tokens, cached_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens) and model, assistant_message_committed holds replies, assistant_tool_calls_committed tool calls (tool_calls name and args) and tool_result_batch_committed their results (results[].text). reasoning_committed keeps only encrypted_content with empty text; the readable reasoning is in reasoning_summary_committed. The user's prompt is runtime.user_intent.accepted with semantic_kind chat (model_messages), and the workspace is workspace_root in runtime.session.metadata. Settings and the login are under ${XDG_CONFIG_HOME:-~/.config}/muse. Checked against 1.4.12."
-readers = ["sch", "clanker-analytics"]
+readers = ["sch", "clanker-analytics", "wakterm"]
 
 [antigravity-editor]
 name = "Antigravity editor"
