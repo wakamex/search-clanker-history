@@ -15,6 +15,7 @@ Usage:
 import argparse
 import concurrent.futures
 import functools
+import glob
 import hashlib
 import itertools
 import json
@@ -244,8 +245,32 @@ def extract_text(message_obj):
     return ""
 
 
+# Claude Code user records that start no model turn: interrupt notices and slash-command records with
+# their output. Lines marked isMeta (command caveats, expanded skill text, image notes) are the same.
+_CLAUDE_HARNESS_PREFIXES = (
+    "[Request interrupted by user", "<command-name>", "<command-message>",
+    "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
+)
+
+
 def classify_line(obj):
-    """Return (type, role, text) for a parsed JSONL line, or None to skip."""
+    """Return (type, role, text) for a parsed JSONL line, or None to skip.
+
+    User records written by the harness rather than sent to the agent are tool entries, so -t user
+    keeps only messages that start a turn.
+    """
+    entry = _classify_claude(obj)
+    if entry and entry[1] == "user" and entry[0] == "user":
+        content = (obj.get("message") or {}).get("content")
+        carries_result = isinstance(content, list) and any(
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+        )  # a tool result with a reminder or note attached as text
+        if carries_result or obj.get("isMeta") or entry[2].lstrip().startswith(_CLAUDE_HARNESS_PREFIXES):
+            return ("tool", "user", entry[2])
+    return entry
+
+
+def _classify_claude(obj):
     ltype = obj.get("type")
     if ltype in ("file-history-snapshot", "progress"):
         return None
@@ -756,13 +781,23 @@ _BATCH_FILES_NEWEST_FIRST = 32
 
 def _jsonl_hits(
     source, roots, pattern, since, classify, session_info, project_filter, keep, newest_first, extra,
-    line_prefix=None, session=None, file_name=None,
+    line_prefix=None, session=None, file_name=None, session_glob=None,
 ):
     """Yield hits oldest file first (lines ascending), or newest first with lines descending.
 
-    Files are scanned in batches so a caller that stops early skips the older files.
+    Files are scanned in batches so a caller that stops early skips the older files. With a session,
+    `session_glob` (a glob pattern relative to each root with {} for the session id prefix) finds its
+    files without listing the whole history.
     """
-    files = _list_files(roots, since, file_name)
+    if session and session_glob:
+        since_ts = since.timestamp() if since else None
+        files = sorted(
+            (p.stat().st_mtime, str(p)) for root in roots
+            for p in root.glob(session_glob.format(glob.escape(session.lower()) + "*"))
+            if since_ts is None or p.stat().st_mtime >= since_ts
+        )
+    else:
+        files = _list_files(roots, since, file_name)
     regex = _compile_ci(pattern)
     if project_filter:
         files = [f for f in files if project_filter(session_info(f[1])[0])]
@@ -801,7 +836,7 @@ def _jsonl_hits(
 def claude_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _jsonl_hits(
         "claude", _claude_roots(), pattern, since, classify_line, parse_session_info,
-        project_filter, _keep_claude, newest_first, extra, session=session,
+        project_filter, _keep_claude, newest_first, extra, session=session, session_glob="*/{}.jsonl",
     )
 
 
@@ -1181,6 +1216,7 @@ def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozen
     paths = [p for p in (_gemini_dir() / "tmp").glob("*/chats/*.json*") if p.suffix in (".json", ".jsonl")]
     yield from _session_file_hits(
         "gemini", paths, pattern, project_filter, since, newest_first, session, _gemini_project, _gemini_load,
+        session_of=lambda p: p.stem.rsplit("-", 1)[-1],  # session-<time>-<first 8 characters of the id>
     )
 
 
@@ -1189,15 +1225,19 @@ def gemini_hits(pattern, project_filter, since, newest_first=False, extra=frozen
 
 def _session_file_hits(
     source, paths, pattern, project_filter, since, newest_first, session, project_of, load,
-    zipped=False, prefilter=True,
+    zipped=False, prefilter=True, session_of=None,
 ):
     """Hits from session files: load(path) returns (session id, [(dt, type, role, text)]).
 
     Files modified before `since` are skipped, and with `prefilter` only files whose raw bytes the
     pattern can match are loaded (`zipped` files are searched decompressed). A callable `prefilter(path,
-    mentions)` replaces that check, for files whose raw bytes split a message.
+    mentions)` replaces that check, for files whose raw bytes split a message. `session_of(path)` gives
+    the session id a path names, or a prefix of it, so other sessions' files are never read.
     """
     since_ts = since.timestamp() if since else None
+    if session and session_of:
+        wanted = session.lower()
+        paths = [p for p in paths if (sid := session_of(p).lower()).startswith(wanted) or wanted.startswith(sid)]
     files = []
     for path in paths:
         try:
@@ -1275,7 +1315,7 @@ def _grok_load(path):
 def grok_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _session_file_hits(
         "grok", list((_grok_dir() / "sessions").glob("*/*/chat_history.jsonl")), pattern, project_filter,
-        since, newest_first, session, _grok_project, _grok_load,
+        since, newest_first, session, _grok_project, _grok_load, session_of=lambda p: p.parent.name,
     )
 
 
@@ -1350,6 +1390,7 @@ def dsh_hits(pattern, project_filter, since, newest_first=False, extra=frozenset
     yield from _session_file_hits(
         "dsh", list((_dsh_dir() / "sessions").glob("*/session-*/session.v*.jsonl.zstd")), pattern,
         project_filter, since, newest_first, session, _dsh_project, _dsh_load, zipped=True,
+        session_of=lambda p: p.parent.name.removeprefix("session-"),
     )
 
 
@@ -1437,6 +1478,7 @@ def cursor_hits(pattern, project_filter, since, newest_first=False, extra=frozen
     yield from _session_file_hits(
         "cursor", list((_cursor_dir() / "chats").glob("*/*/store.db")), pattern, project_filter, since,
         newest_first, session, _cursor_project, _cursor_load, prefilter=_cursor_mentions,
+        session_of=lambda p: p.parent.name,
     )
 
 
@@ -1503,7 +1545,7 @@ def _muse_load(path):
 def muse_hits(pattern, project_filter, since, newest_first=False, extra=frozenset(), session=None):
     yield from _session_file_hits(
         "muse", list((_muse_dir() / "sessions").glob("*/*/*/*/session.jsonl")), pattern, project_filter,
-        since, newest_first, session, _muse_project, _muse_load,
+        since, newest_first, session, _muse_project, _muse_load, session_of=lambda p: p.parent.name,
     )
 
 
@@ -1618,6 +1660,7 @@ def antigravity_hits(pattern, project_filter, since, newest_first=False, extra=f
     yield from _jsonl_hits(
         "antigravity", [_antigravity_dir() / "brain"], pattern, since, classify_agy_line, _agy_session_info,
         project_filter, _keep_agy, newest_first, extra, session=session, file_name=_AGY_TRANSCRIPT,
+        session_glob="{}/.system_generated/logs/" + _AGY_TRANSCRIPT,
     )
 
 

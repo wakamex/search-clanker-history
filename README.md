@@ -130,7 +130,7 @@ sch "error" --since 2026-04-01 --until 2026-04-10
 | Cursor Agent | `~/.cursor/chats/<hash>/<id>/store.db`, one SQLite database per chat | none | Workspace named in the chat's first message, with `/` replaced by `-` |
 | Muse Code | `~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl` | `XDG_DATA_HOME` | Session workspace root, with `/` replaced by `-` |
 
-Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given, and reasoning unless `--thinking` is given. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
+Every agent is reduced to user messages, assistant messages, and tool calls and results. Tool entries are hidden unless `--tools` is given, and reasoning unless `--thinking` is given. Records the harness writes into the user's side of the conversation, which start no model turn, also count as tool entries: Claude Code's interrupt notices, slash-command records and their output, lines it marks `isMeta`, and tool results with a reminder attached. So `-t user` lists the messages that start a turn, including task notifications and messages other agents deliver. `-s SESSION` reads only that session's files for every agent whose file names carry the session id. Codex developer messages and the AGENTS.md and environment context that Codex injects as user messages are not searched.
 
 Databases are opened read-only.
 

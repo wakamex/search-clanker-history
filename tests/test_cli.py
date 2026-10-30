@@ -742,6 +742,33 @@ class CliTests(unittest.TestCase):
         self.assertEqual(found.returncode, 0, found.stderr)
         self.assertIn("1 match(es)", found.stdout)
 
+    def test_claude_harness_records_are_not_user_messages(self):
+        def user(content, **extra):
+            return {**record("user", "", "2026-01-02T00:00:00Z"), "message": {"role": "user", "content": content}, **extra}
+
+        lines = [
+            user("turn one: run the probe"),
+            user("<local-command-caveat>Caveat: the probe output follows</local-command-caveat>", isMeta=True),
+            user("<command-name>/clear</command-name>\n<command-message>clear probe</command-message>"),
+            user("<local-command-stdout>probe cleared</local-command-stdout>"),
+            user([{"type": "text", "text": "[Request interrupted by user for tool use] probe"}]),
+            user([{"type": "tool_result", "tool_use_id": "t", "content": "probe output"},
+                  {"type": "text", "text": "<system-reminder>probe reminder</system-reminder>"}]),
+            user("<task-notification>\nprobe job finished\n</task-notification>"),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            project = config_dir / "projects" / "-code-demo"
+            project.mkdir(parents=True)
+            (project / "0123abcd-0000-0000-0000-000000000000.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+            turns = self.run_cli("search-clanker-history", "probe", "-t", "user", "--json", config_dir=config_dir, home=temporary)
+            everything = self.run_cli("search-clanker-history", "probe", "-t", "user", "--tools", config_dir=config_dir, home=temporary)
+
+        self.assertEqual(turns.returncode, 0, turns.stderr)
+        texts = [json.loads(line)["text"] for line in turns.stdout.splitlines()]
+        self.assertEqual(texts, ["turn one: run the probe", "<task-notification>\nprobe job finished\n</task-notification>"])
+        self.assertIn("7 match(es)", everything.stdout)
+
     def test_since_skips_sessions_last_modified_earlier(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_dir = Path(temporary)
