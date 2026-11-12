@@ -775,27 +775,31 @@ def _keep_codex(line, extra):
     return _has_any(line, _MESSAGE) or ("thinking" in extra and _has_any(line, _REASONING))
 
 
-_BATCH_FILES_UNBOUNDED = 256
+_BATCH_FILES_UNBOUNDED = 1024
 _BATCH_FILES_NEWEST_FIRST = 32
 
 
 def _jsonl_hits(
     source, roots, pattern, since, classify, session_info, project_filter, keep, newest_first, extra,
-    line_prefix=None, session=None, file_name=None, session_glob=None,
+    line_prefix=None, session=None, file_name=None, session_glob=None, files_by_glob=False,
 ):
     """Yield hits oldest file first (lines ascending), or newest first with lines descending.
 
-    Files are scanned in batches so a caller that stops early skips the older files. With a session,
-    `session_glob` (a glob pattern relative to each root with {} for the session id prefix) finds its
-    files without listing the whole history.
+    Files are scanned in batches so a caller that stops early skips the older files. `session_glob` is
+    a glob pattern relative to each root with {} for the session id: with a session it finds that
+    session's files without listing the whole history, and with `files_by_glob` it lists every
+    session's file without walking each session's folders.
     """
-    if session and session_glob:
+    if session_glob and (session or files_by_glob):
         since_ts = since.timestamp() if since else None
-        files = sorted(
-            (p.stat().st_mtime, str(p)) for root in roots
-            for p in root.glob(session_glob.format(glob.escape(session.lower()) + "*"))
-            if since_ts is None or p.stat().st_mtime >= since_ts
-        )
+        sid = glob.escape(session.lower()) + "*" if session else "*"
+        files = []
+        for root in roots:
+            for path in root.glob(session_glob.format(sid)):
+                mtime = path.stat().st_mtime
+                if since_ts is None or mtime >= since_ts:
+                    files.append((mtime, str(path)))
+        files.sort()
     else:
         files = _list_files(roots, since, file_name)
     regex = _compile_ci(pattern)
@@ -1660,7 +1664,7 @@ def antigravity_hits(pattern, project_filter, since, newest_first=False, extra=f
     yield from _jsonl_hits(
         "antigravity", [_antigravity_dir() / "brain"], pattern, since, classify_agy_line, _agy_session_info,
         project_filter, _keep_agy, newest_first, extra, session=session, file_name=_AGY_TRANSCRIPT,
-        session_glob="{}/.system_generated/logs/" + _AGY_TRANSCRIPT,
+        session_glob="{}/.system_generated/logs/" + _AGY_TRANSCRIPT, files_by_glob=True,
     )
 
 
