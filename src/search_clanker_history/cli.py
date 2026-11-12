@@ -1091,11 +1091,17 @@ def hermes_hits(pattern, project_filter, since, newest_first=False, extra=frozen
 _REGEX_SPECIAL = frozenset(".^$*+?{}[]\\|()")
 
 
+def _ascii_literal(pattern):
+    """The pattern as plain text when it is ASCII with no regex syntax, so it matches only itself."""
+    return pattern if pattern.isascii() and not _REGEX_SPECIAL & set(pattern) else None
+
+
+@functools.lru_cache(maxsize=None)
 def _mentions(pattern):
     """A cheap check of a file's raw bytes that is true wherever the pattern can match."""
     regex = _compile_ci(pattern)
-    if pattern.isascii() and not _REGEX_SPECIAL & set(pattern):
-        literal = pattern.lower().encode()
+    if (literal := _ascii_literal(pattern)) is not None:
+        literal = literal.lower().encode()
         return lambda raw: literal in raw.lower()  # several times faster than a case-insensitive regex
     return lambda raw: regex.search(raw.decode("utf-8", "ignore")) is not None
 
@@ -1240,7 +1246,7 @@ def _session_file_hits(
 
     Files modified before `since` are skipped, and with `prefilter` only files whose raw bytes the
     pattern can match are loaded (`zipped` files are searched decompressed). A callable `prefilter(path,
-    mentions)` replaces that check, for files whose raw bytes split a message. `session_of(path)` gives
+    pattern)` replaces that check, for files whose raw bytes split a message. `session_of(path)` gives
     the session id a path names, or a prefix of it, so other sessions' files are never read.
     """
     since_ts = since.timestamp() if since else None
@@ -1260,8 +1266,10 @@ def _session_file_hits(
         files = [f for f in files if project_filter(project_of(f[1]))]
     regex = _compile_ci(pattern)
     if callable(prefilter):
-        mentions = _mentions(pattern)
-        candidates = {p for _, p in files if prefilter(p, mentions)}
+        # Threads, since a prefilter that runs inside SQLite releases the interpreter lock.
+        with concurrent.futures.ThreadPoolExecutor(16) as pool:
+            checked = pool.map(lambda p: (p, prefilter(p, pattern)), [p for _, p in files])
+            candidates = {p for p, found in checked if found}
     else:
         candidates = _files_mentioning(pattern, [p for _, p in files], zipped)
     for _, path in files:
@@ -1410,13 +1418,16 @@ def dsh_hits(pattern, project_filter, since, newest_first=False, extra=frozenset
 # meta row 0 is hex-encoded JSON with the chat's createdAt, which every message takes. The first
 # message names the workspace in a <user_info> block. Cursor stores reasoning redacted.
 _CURSOR_WORKSPACE = re.compile(r"^Workspace Path: (.+)$", re.M)
+# Message blobs are JSON objects; the binary tree records, most of the bytes, are skipped by SQLite
+# without being read into Python.
+_CURSOR_JSON = "substr(data, 1, 1) = X'7B'"
 
 
 def _cursor_messages(path):
     conn = _open_db(path)
     with conn:
         meta = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
-        rows = conn.execute("SELECT data FROM blobs ORDER BY rowid").fetchall()
+        rows = conn.execute(f"SELECT data FROM blobs WHERE {_CURSOR_JSON} ORDER BY rowid").fetchall()
     conn.close()
     try:
         created = json.loads(bytes.fromhex(meta[0])).get("createdAt") if meta else None
@@ -1471,12 +1482,23 @@ def _cursor_load(path):
     return path.parent.name, entries
 
 
-def _cursor_mentions(path, mentions):
-    """Whether any blob can match: a database page splits long blobs, so the raw file cannot be searched."""
+def _cursor_mentions(path, pattern):
+    """Whether any message blob can match: a database page splits long blobs, so the raw file cannot be searched.
+
+    Plain ASCII text is matched by SQLite's LIKE, which ignores ASCII case as the search does and runs
+    without the interpreter lock, so chats are checked in parallel; other patterns are checked in Python.
+    """
     try:
         conn = _open_db(path)
         with conn:
-            found = any(mentions(data) for (data,) in conn.execute("SELECT data FROM blobs") if isinstance(data, bytes))
+            if (literal := _ascii_literal(pattern)) is not None:
+                escaped = re.sub(r"([%_\\])", r"\\\1", literal)
+                found = conn.execute(
+                    f"SELECT 1 FROM blobs WHERE {_CURSOR_JSON} AND data LIKE ? ESCAPE '\\' LIMIT 1", (f"%{escaped}%",),
+                ).fetchone() is not None
+            else:
+                mentions = _mentions(pattern)
+                found = any(mentions(data) for (data,) in conn.execute(f"SELECT data FROM blobs WHERE {_CURSOR_JSON}"))
         conn.close()
         return found
     except sqlite3.Error:

@@ -445,6 +445,7 @@ class CliTests(unittest.TestCase):
                 {"role": "system", "content": "cursor system prompt about quaxle"},
                 {"role": "user", "content": "<user_info>\nOS Version: linux\nWorkspace Path: /code/demo\n</user_info> quaxle"},
                 {"role": "user", "content": [{"type": "text", "text": "where is the quaxle"}]},
+                {"role": "user", "content": [{"type": "text", "text": "is 100%_done the QUAXLE rate?"}]},
                 {"role": "assistant", "id": "a", "content": [
                     {"type": "redacted-reasoning", "data": "secret"},
                     {"type": "text", "text": "the quaxle is in utils"},
@@ -460,6 +461,8 @@ class CliTests(unittest.TestCase):
 
             plain = self.run_cli("search-clanker-history", "quaxle", "--agent", "cursor", "-p", "demo", home=temporary)
             tools = self.run_cli("search-clanker-history", "quaxle", "--agent", "cursor", "--tools", home=temporary)
+            literal = self.run_cli("search-clanker-history", "100%_done the quaxle", "--agent", "cursor", home=temporary)
+            no_wildcard = self.run_cli("search-clanker-history", "100%_done thx quaxle", "--agent", "cursor", home=temporary)
 
         self.assertEqual(plain.returncode, 0, plain.stderr)
         self.assertIn("── 2026-01-02 03:04 | cursor | -code-demo | session:78e751b3 ──", plain.stdout)
@@ -467,7 +470,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("[assistant] the quaxle is in utils", plain.stdout)
         self.assertNotIn("user_info", plain.stdout)
         self.assertNotIn("system prompt", plain.stdout)
-        self.assertIn("2 match(es)", plain.stdout)
+        self.assertIn("3 match(es)", plain.stdout)
+        self.assertIn("[user] is 100%_done the QUAXLE rate?", literal.stdout)  # % and _ are text, case ignored
+        self.assertIn("No matches found.", no_wildcard.stdout)
         self.assertIn("[Grep:", tools.stdout)
         self.assertIn("[tool] utils.py: quaxle", tools.stdout)
 
