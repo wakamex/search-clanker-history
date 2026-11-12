@@ -775,7 +775,9 @@ def _keep_codex(line, extra):
     return _has_any(line, _MESSAGE) or ("thinking" in extra and _has_any(line, _REASONING))
 
 
-_BATCH_FILES_UNBOUNDED = 1024
+# Files per rg run. A plain search starts small so its first results print soon, then doubles up to
+# the largest batch, since each run costs a start-up; -n stays small to stop reading early.
+_BATCH_FILES_FIRST, _BATCH_FILES_LARGEST = 256, 1024
 _BATCH_FILES_NEWEST_FIRST = 32
 
 
@@ -809,9 +811,12 @@ def _jsonl_hits(
         files = [f for f in files if _in_session(session_info(f[1])[1], session)]
     if newest_first:
         files.reverse()
-    size = _BATCH_FILES_NEWEST_FIRST if newest_first else _BATCH_FILES_UNBOUNDED
-    for i in range(0, len(files), size):
+    size, i = (_BATCH_FILES_NEWEST_FIRST if newest_first else _BATCH_FILES_FIRST), 0
+    while i < len(files):
         rank = {path: n for n, (_, path) in enumerate(files[i:i + size])}
+        i += size
+        if not newest_first:
+            size = min(size * 2, _BATCH_FILES_LARGEST)
         found = {}
         prefix = None if "tool" in extra else line_prefix(extra) if callable(line_prefix) else line_prefix
         for path, offset, line in _scan(pattern, list(rank), lambda raw: keep(raw, extra), prefix):
@@ -1848,9 +1853,11 @@ def main():
     try:
         _main()
     except BrokenPipeError:
-        # The reader, such as `head`, closed the pipe; stop quietly as other command-line tools do.
+        # The reader, such as `head`, closed the pipe; stop quietly as other command-line tools do,
+        # without waiting for agents still being searched in other threads.
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        sys.exit(1)
+        sys.stderr.flush()
+        os._exit(1)
 
 
 def _main():
@@ -2019,12 +2026,19 @@ def _main():
             sys.exit(1)
         args.since = start.dt
 
+    # Agents are searched at once, each in a thread, while the first prints. The scanner used without
+    # rg forks worker processes, which is unsafe while other threads run, so it keeps them in turn.
+    pool = concurrent.futures.ThreadPoolExecutor(len(names)) if len(names) > 1 and _find_rg() else None
     if args.limit:
-        recent = []
-        for name in names:
-            recent.extend(itertools.islice(stream(name, True), args.limit))
-        recent.sort(key=lambda h: h.dt or _EPOCH)
+        def newest(name):
+            return list(itertools.islice(stream(name, True), args.limit))
+
+        found = list(pool.map(newest, names)) if pool else [newest(name) for name in names]
+        recent = sorted((h for hits in found for h in hits), key=lambda h: h.dt or _EPOCH)
         hits = recent[-args.limit:]
+    elif pool:
+        later = [pool.submit(lambda name=name: list(stream(name, False))) for name in names[1:]]
+        hits = itertools.chain(stream(names[0], False), itertools.chain.from_iterable(f.result() for f in later))
     else:
         hits = itertools.chain.from_iterable(stream(name, False) for name in names)
 
