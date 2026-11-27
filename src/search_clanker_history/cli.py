@@ -425,11 +425,12 @@ def _mmap_extract_lines(mm, size, match_positions):
     return results
 
 
-def _search_file_hs(args):
-    """Search a single file using hyperscan + mmap. Runs in a worker process."""
-    fpath, pattern_str = args
-    import hyperscan as hs
-
+def _hyperscan_db(pattern_str):
+    """A compiled hyperscan database for the pattern, or None when hyperscan is missing or rejects it."""
+    try:
+        import hyperscan as hs
+    except ImportError:
+        return None
     db = hs.Database()
     try:
         db.compile(
@@ -437,10 +438,14 @@ def _search_file_hs(args):
             flags=[hs.HS_FLAG_CASELESS | hs.HS_FLAG_SOM_LEFTMOST],
         )
     except hs.error:
-        db.compile(
-            expressions=[re.escape(pattern_str).encode("utf-8", errors="replace")],
-            flags=[hs.HS_FLAG_CASELESS | hs.HS_FLAG_SOM_LEFTMOST],
-        )
+        return None  # for example a lookahead, which hyperscan does not support
+    return db
+
+
+def _search_file_hs(args):
+    """Search a single file using hyperscan + mmap. Runs in a worker process."""
+    fpath, pattern_str = args
+    db = _hyperscan_db(pattern_str)
 
     positions = []
 
@@ -502,10 +507,14 @@ def _has_hyperscan():
 
 
 def _scan_python(pattern, paths):
-    """Python fallback: hyperscan if installed, else mmap+re. Both multiprocessed."""
-    use_hs = _has_hyperscan()
+    """Python fallback: hyperscan if installed and it accepts the pattern, else mmap+re. Both multiprocessed."""
+    try:
+        re.compile(pattern)
+    except re.error:
+        pattern = re.escape(pattern)  # searched as text, as the re scanner does
+    use_hs = _hyperscan_db(pattern) is not None
     worker_fn = _search_file_hs if use_hs else _search_file_re
-    if not use_hs:
+    if not _has_hyperscan():
         print(
             f"{DIM()}(tip: pip install hyperscan for ~4x faster searches){RESET()}",
             file=sys.stderr,
